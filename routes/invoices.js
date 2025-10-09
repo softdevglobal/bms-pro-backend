@@ -797,6 +797,23 @@ router.put('/:id/status', verifyToken, async (req, res) => {
       }
     }
 
+    // If status changed to PAID, send thank-you email (best-effort)
+    if (status === 'PAID' && oldInvoiceData.status !== 'PAID') {
+      try {
+        const processedInvoiceData = {
+          ...oldInvoiceData,
+          status: 'PAID',
+          issueDate: oldInvoiceData.issueDate?.toDate?.() || new Date(),
+          dueDate: oldInvoiceData.dueDate?.toDate?.() || new Date(),
+          createdAt: oldInvoiceData.createdAt?.toDate?.() || new Date(),
+          updatedAt: new Date()
+        };
+        await emailService.sendPaymentThankYouEmail(processedInvoiceData);
+      } catch (emailError) {
+        console.error('Failed to send payment thank-you email:', emailError);
+      }
+    }
+
     // Log invoice status update
     const AuditService = require('../services/auditService');
     const newInvoiceData = { ...oldInvoiceData, status: status };

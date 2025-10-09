@@ -1051,6 +1051,81 @@ class EmailService {
     }
   }
 
+  async sendPaymentThankYouEmail(invoiceData) {
+    try {
+      const subject = `Payment received - Invoice ${invoiceData.invoiceNumber}`;
+      const html = this.generatePaymentThankYouHTML(invoiceData);
+      const text = `Dear ${invoiceData.customer?.name || 'Customer'},\n\nThank you for your payment. We have marked your invoice ${invoiceData.invoiceNumber} as PAID.\n\nAmount: $${(invoiceData.finalTotal || invoiceData.total || 0).toFixed ? (invoiceData.finalTotal || invoiceData.total).toFixed(2) : invoiceData.finalTotal || invoiceData.total} AUD\nInvoice Type: ${invoiceData.invoiceType}\nIssue Date: ${new Date(invoiceData.issueDate).toLocaleDateString()}\n\nWe appreciate your business!`;
+
+      const mailOptions = {
+        from: 'dpawan434741@gmail.com',
+        to: invoiceData.customer?.email,
+        subject,
+        html,
+        text
+      };
+
+      const result = await this.transporter.sendMail(mailOptions);
+      console.log('✅ Payment thank-you email sent successfully:', result.messageId);
+      return result;
+    } catch (error) {
+      console.error('❌ Failed to send payment thank-you email:', error);
+      throw error;
+    }
+  }
+
+  generatePaymentThankYouHTML(invoiceData) {
+    const logoUrl = 'https://via.placeholder.com/200x80/4F46E5/FFFFFF?text=Cranbourne+Hall';
+    const amount = (invoiceData.finalTotal || invoiceData.total) || 0;
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Payment Received - Invoice ${invoiceData.invoiceNumber}</title>
+      </head>
+      <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f1f5f9;">
+        <div style="max-width: 600px; margin: 0 auto; background-color: white; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+          <div style="background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); padding: 40px 20px; text-align: center;">
+            <img src="${logoUrl}" alt="Cranbourne Public Hall" style="max-width: 200px; height: auto;">
+            <h1 style="color: white; margin: 20px 0 0 0; font-size: 24px; font-weight: 600;">Payment Received</h1>
+          </div>
+          <div style="padding: 40px 30px;">
+            <h2 style="color: #1e293b; margin: 0 0 20px 0; font-size: 24px; font-weight: 700;">Thank you, ${invoiceData.customer?.name || 'Customer'}!</h2>
+            <p style="color: #475569; line-height: 1.6; font-size: 16px;">We have received your payment and marked your invoice as <strong>PAID</strong>.</p>
+            <div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; margin: 20px 0;">
+              <h3 style="color: #1e293b; margin: 0 0 15px 0;">Invoice Summary</h3>
+              <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Invoice Number:</td>
+                  <td style="padding: 8px 0; color: #1e293b;">${invoiceData.invoiceNumber}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Invoice Type:</td>
+                  <td style="padding: 8px 0; color: #1e293b;">${invoiceData.invoiceType}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Issue Date:</td>
+                  <td style="padding: 8px 0; color: #1e293b;">${new Date(invoiceData.issueDate).toLocaleDateString()}</td>
+                </tr>
+                <tr style="background-color: #dcfce7; border: 2px solid #22c55e;">
+                  <td style="padding: 12px 8px; color: #166534; font-weight: bold;">Amount Paid:</td>
+                  <td style="padding: 12px 8px; color: #166534; font-weight: bold; text-align: right;">$${amount.toFixed ? amount.toFixed(2) : amount} AUD</td>
+                </tr>
+              </table>
+            </div>
+            <p style="color: #475569; line-height: 1.6; font-size: 16px;">If you need a receipt or have any questions, please reply to this email.</p>
+            <div style="border-top: 1px solid #e2e8f0; margin-top: 30px; padding-top: 20px; text-align: center;">
+              <p style="color: #64748b; font-size: 14px; margin: 0;">We appreciate your business!</p>
+            </div>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+  }
+
   generateInvoiceReminderHTMLTemplate(invoiceData) {
     const logoUrl = 'https://via.placeholder.com/200x80/4F46E5/FFFFFF?text=Cranbourne+Hall';
     const isOverdue = invoiceData.status === 'OVERDUE';
