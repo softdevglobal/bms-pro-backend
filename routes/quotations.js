@@ -4,11 +4,51 @@ const emailService = require('../services/emailService');
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
+const https = require('https');
 
 const router = express.Router();
 
+// Helper: download a remote image into a Buffer (HTTPS only)
+function downloadImageBuffer(url) {
+  return new Promise((resolve, reject) => {
+    try {
+      https
+        .get(url, (res) => {
+          if (res.statusCode && res.statusCode >= 400) {
+            return reject(new Error(`HTTP ${res.statusCode} fetching image`));
+          }
+          const chunks = [];
+          res.on('data', (d) => chunks.push(d));
+          res.on('end', () => resolve(Buffer.concat(chunks)));
+        })
+        .on('error', reject);
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+// Helper: try to fetch hall owner's profile picture as Buffer
+async function getHallOwnerLogoBuffer(hallOwnerId) {
+  try {
+    if (!hallOwnerId) return null;
+    const userDoc = await admin.firestore().collection('users').doc(hallOwnerId).get();
+    if (!userDoc.exists) return null;
+    const userData = userDoc.data();
+    const url = userData.profilePicture;
+    if (!url || typeof url !== 'string') return null;
+    const buffer = await downloadImageBuffer(url);
+    return buffer;
+  } catch (e) {
+    console.warn('Quotation PDF: unable to fetch hall owner logo:', e.message);
+    return null;
+  }
+}
+
 // Helper function to generate quotation PDF
 async function generateQuotationPDF(quotationData) {
+  // Fetch logo buffer best-effort
+  const logoBuffer = await getHallOwnerLogoBuffer(quotationData.hallOwnerId);
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({ 
@@ -39,6 +79,13 @@ async function generateQuotationPDF(quotationData) {
       doc.rect(40, 20, 60, 60)
          .fill('#ffffff')
          .stroke(primaryColor, 2);
+      if (logoBuffer) {
+        try {
+          doc.image(logoBuffer, 40, 20, { width: 60, height: 60 });
+        } catch (imgErr) {
+          console.warn('Quotation PDF: failed to draw logo image:', imgErr.message);
+        }
+      }
       
       doc.fillColor('#ffffff')
          .fontSize(24)
