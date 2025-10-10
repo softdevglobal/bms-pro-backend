@@ -19,6 +19,40 @@ class EmailService {
     this.verifyConnection();
   }
 
+  // Safely normalize Firestore Timestamp, Date, ISO string, or epoch to Date
+  normalizeDate(dateLike) {
+    try {
+      if (!dateLike) return null;
+      if (dateLike instanceof Date) return isNaN(dateLike.getTime()) ? null : dateLike;
+      if (typeof dateLike?.toDate === 'function') {
+        const d = dateLike.toDate();
+        return isNaN(d?.getTime?.()) ? null : d;
+      }
+      if (typeof dateLike === 'number') {
+        const d = new Date(dateLike);
+        return isNaN(d.getTime()) ? null : d;
+      }
+      if (typeof dateLike === 'string') {
+        const d = new Date(dateLike);
+        return isNaN(d.getTime()) ? null : d;
+      }
+      if (typeof dateLike === 'object' && dateLike._seconds) {
+        const d = new Date(dateLike._seconds * 1000);
+        return isNaN(d.getTime()) ? null : d;
+      }
+      const d = new Date(dateLike);
+      return isNaN(d.getTime()) ? null : d;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Format any date-like value to en-AU date or 'N/A'
+  formatDateAU(dateLike) {
+    const d = this.normalizeDate(dateLike);
+    return d ? d.toLocaleDateString('en-AU') : 'N/A';
+  }
+
   async verifyConnection() {
     try {
       console.log('📧 EmailService: Verifying connection...');
@@ -468,14 +502,17 @@ class EmailService {
         notes 
       } = bookingData;
 
+      // Prefer human-readable venue name if available
+      const venueName = bookingData.hallName || bookingData.resourceName || resource;
+
       const mailOptions = {
         from: 'dpawan434741@gmail.com',
         to: customerEmail,
-        subject: `Booking Confirmed - ${eventType} at ${resource}`,
+        subject: `Booking Confirmed - ${eventType} at ${venueName}`,
         html: this.generateBookingConfirmationHTML({
           customerName,
           eventType,
-          resource,
+          resource: venueName,
           eventDate,
           startTime,
           endTime,
@@ -817,7 +854,7 @@ class EmailService {
       const subject = `Invoice ${invoiceData.invoiceNumber} - ${invoiceData.invoiceType}`;
       
       // Enhanced message with deposit information
-      let message = `Dear ${invoiceData.customer.name},\n\nPlease find attached your invoice for ${invoiceData.invoiceType} payment.\n\nInvoice Details:\n- Invoice Number: ${invoiceData.invoiceNumber}\n- Issue Date: ${new Date(invoiceData.issueDate).toLocaleDateString()}\n- Due Date: ${new Date(invoiceData.dueDate).toLocaleDateString()}\n- Booking Source: ${invoiceData.bookingSource || 'Direct'}`;
+      let message = `Dear ${invoiceData.customer.name},\n\nPlease find attached your invoice for ${invoiceData.invoiceType} payment.\n\nInvoice Details:\n- Invoice Number: ${invoiceData.invoiceNumber}\n- Issue Date: ${this.formatDateAU(invoiceData.issueDate)}\n- Due Date: ${this.formatDateAU(invoiceData.dueDate)}\n- Booking Source: ${invoiceData.bookingSource || 'Direct'}`;
       
       // Add quotation information if applicable
       if (invoiceData.bookingSource === 'quotation' && invoiceData.quotationId) {
@@ -897,11 +934,11 @@ class EmailService {
                 </tr>
                 <tr>
                   <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Issue Date:</td>
-                  <td style="padding: 8px 0; color: #1e293b;">${new Date(invoiceData.issueDate).toLocaleDateString()}</td>
+                  <td style="padding: 8px 0; color: #1e293b;">${this.formatDateAU(invoiceData.issueDate)}</td>
                 </tr>
                 <tr>
                   <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Due Date:</td>
-                  <td style="padding: 8px 0; color: #1e293b;">${new Date(invoiceData.dueDate).toLocaleDateString()}</td>
+                  <td style="padding: 8px 0; color: #1e293b;">${this.formatDateAU(invoiceData.dueDate)}</td>
                 </tr>
                 <tr>
                   <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Invoice Type:</td>
@@ -1017,7 +1054,7 @@ class EmailService {
       const subject = `Payment Reminder - Invoice ${invoiceData.invoiceNumber}`;
       
       // Enhanced message with deposit information
-      let message = `Dear ${invoiceData.customer.name},\n\nThis is a friendly reminder that your invoice ${invoiceData.invoiceNumber} is ${invoiceData.status === 'OVERDUE' ? 'overdue' : 'due for payment'}.\n\nInvoice Details:\n- Invoice Number: ${invoiceData.invoiceNumber}\n- Issue Date: ${new Date(invoiceData.issueDate).toLocaleDateString()}\n- Due Date: ${new Date(invoiceData.dueDate).toLocaleDateString()}\n- Invoice Type: ${invoiceData.invoiceType}\n- Booking Source: ${invoiceData.bookingSource || 'Direct'}`;
+      let message = `Dear ${invoiceData.customer.name},\n\nThis is a friendly reminder that your invoice ${invoiceData.invoiceNumber} is ${invoiceData.status === 'OVERDUE' ? 'overdue' : 'due for payment'}.\n\nInvoice Details:\n- Invoice Number: ${invoiceData.invoiceNumber}\n- Issue Date: ${this.formatDateAU(invoiceData.issueDate)}\n- Due Date: ${this.formatDateAU(invoiceData.dueDate)}\n- Invoice Type: ${invoiceData.invoiceType}\n- Booking Source: ${invoiceData.bookingSource || 'Direct'}`;
       
       // Add quotation information if applicable
       if (invoiceData.bookingSource === 'quotation' && invoiceData.quotationId) {
@@ -1189,11 +1226,11 @@ class EmailService {
                 </tr>
                 <tr>
                   <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Issue Date:</td>
-                  <td style="padding: 8px 0; color: #1e293b;">${new Date(invoiceData.issueDate).toLocaleDateString()}</td>
+                  <td style="padding: 8px 0; color: #1e293b;">${this.formatDateAU(invoiceData.issueDate)}</td>
                 </tr>
                 <tr>
                   <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Due Date:</td>
-                  <td style="padding: 8px 0; color: ${isOverdue ? '#dc2626' : '#1e293b'};">${new Date(invoiceData.dueDate).toLocaleDateString()}</td>
+                  <td style="padding: 8px 0; color: ${isOverdue ? '#dc2626' : '#1e293b'};">${this.formatDateAU(invoiceData.dueDate)}</td>
                 </tr>
                 <tr>
                   <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Invoice Type:</td>
