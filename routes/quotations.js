@@ -45,6 +45,21 @@ async function getHallOwnerLogoBuffer(hallOwnerId) {
   }
 }
 
+// Helper: resolve a resource's display name from its ID; fall back to the provided value
+async function getResourceDisplayName(resourceIdOrName) {
+  try {
+    if (!resourceIdOrName) return resourceIdOrName;
+    const resourceDoc = await admin.firestore().collection('resources').doc(resourceIdOrName).get();
+    if (resourceDoc.exists) {
+      const data = resourceDoc.data();
+      if (data && data.name) return data.name;
+    }
+  } catch (e) {
+    // best-effort only; ignore errors and fall back to original value
+  }
+  return resourceIdOrName;
+}
+
 // Helper function to generate quotation PDF
 async function generateQuotationPDF(quotationData) {
   // Fetch logo buffer best-effort
@@ -191,32 +206,37 @@ async function generateQuotationPDF(quotationData) {
          .text(`${quotationData.resource} - ${quotationData.eventType}`, 200, 425, { width: 240 })
          .text(`$${quotationData.totalAmount.toFixed(2)}`, 450, 425, { width: 95, align: 'right' });
 
-      // Deposit section (if applicable)
+      // Totals box showing Total, Deposit (if any), and Final
       let currentY = 460;
+      const totalsBoxHeight = quotationData.depositType && quotationData.depositType !== 'None' ? 70 : 55;
+      doc.rect(350, currentY, 205, totalsBoxHeight)
+         .fill('#ffffff')
+         .stroke(secondaryColor, 1);
+
+      // Total line
+      doc.fillColor(darkGray)
+         .fontSize(11)
+         .font('Helvetica-Bold')
+         .text('Total:', 360, currentY + 10)
+         .font('Helvetica')
+         .text(`$${quotationData.totalAmount.toFixed(2)} AUD`, 360, currentY + 10, { width: 185, align: 'right' });
+
+      // Deposit line if applicable
+      let finalAmount = quotationData.totalAmount;
       if (quotationData.depositType && quotationData.depositType !== 'None') {
-        doc.rect(350, currentY, 205, 30)
-           .fill('#ffffff')
-           .stroke(secondaryColor, 1);
-        
-        doc.fillColor(darkGray)
-           .fontSize(11)
+        doc.font('Helvetica-Bold')
+           .text('Deposit:', 360, currentY + 25)
            .font('Helvetica')
-           .text('Deposit:', 360, currentY + 10)
-           .text(`$${quotationData.depositAmount.toFixed(2)}`, 500, currentY + 10, { width: 45, align: 'right' });
-        
-        currentY += 35;
+           .text(`-$${quotationData.depositAmount.toFixed(2)} AUD`, 360, currentY + 25, { width: 185, align: 'right' });
+        finalAmount = quotationData.totalAmount - quotationData.depositAmount;
       }
 
-      // Total section
-      doc.rect(350, currentY, 205, 40)
-         .fill(accentColor);
-      
-      doc.fillColor('#ffffff')
-         .fontSize(16)
+      // Final line
+      const finalY = quotationData.depositType && quotationData.depositType !== 'None' ? currentY + 40 : currentY + 25;
+      doc.fillColor(accentColor)
          .font('Helvetica-Bold')
-         .text('TOTAL AMOUNT', 360, currentY + 10)
-         .fontSize(20)
-         .text(`$${quotationData.totalAmount.toFixed(2)} AUD`, 360, currentY + 25, { width: 185, align: 'right' });
+         .text('Final:', 360, finalY)
+         .text(`$${finalAmount.toFixed(2)} AUD`, 360, finalY, { width: 185, align: 'right' });
 
       // Notes section
       if (quotationData.notes) {
@@ -628,19 +648,23 @@ router.put('/:id/status', verifyToken, async (req, res) => {
       return res.status(403).json({ message: 'Access denied. Only hall owners and sub-users can update quotation status.' });
     }
 
-    // Update quotation status
+    // Resolve display name for resource to use in all communications
+    const resourceDisplayName = await getResourceDisplayName(quotationData.resource);
+
+    // Update quotation status (and persist a friendly resourceName for convenience)
     await quotationDoc.ref.update({
       status: status,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      resourceName: resourceDisplayName
     });
 
     // If status is 'Sent', send email with PDF
     if (status === 'Sent') {
       try {
-        const pdfBuffer = await generateQuotationPDF(quotationData);
+        const pdfBuffer = await generateQuotationPDF({ ...quotationData, resource: resourceDisplayName });
         
         // Send email with PDF attachment
-        await emailService.sendQuotationEmail(quotationData, pdfBuffer);
+        await emailService.sendQuotationEmail({ ...quotationData, resource: resourceDisplayName }, pdfBuffer);
         console.log('Quotation email sent successfully to:', quotationData.customerEmail);
       } catch (emailError) {
         console.error('Failed to send quotation email:', emailError);
@@ -655,7 +679,7 @@ router.put('/:id/status', verifyToken, async (req, res) => {
           customerName: quotationData.customerName,
           customerEmail: quotationData.customerEmail,
           eventType: quotationData.eventType,
-          resource: quotationData.resource,
+          resource: resourceDisplayName,
           eventDate: quotationData.eventDate,
           quotationId: quotationData.id
         });
@@ -678,8 +702,8 @@ router.put('/:id/status', verifyToken, async (req, res) => {
           customerPhone: quotationData.customerPhone,
           customerAvatar: null,
           eventType: quotationData.eventType,
-          selectedHall: quotationData.resource,
-          hallName: quotationData.resource, // You might want to get the actual hall name
+          selectedHall: quotationData.resource, // keep ID for booking linkage
+          hallName: resourceDisplayName,
           bookingDate: quotationData.eventDate,
           startTime: quotationData.startTime,
           endTime: quotationData.endTime,
@@ -723,7 +747,7 @@ router.put('/:id/status', verifyToken, async (req, res) => {
             customerName: quotationData.customerName,
             customerEmail: quotationData.customerEmail,
             eventType: quotationData.eventType,
-            resource: quotationData.resource,
+            resource: resourceDisplayName,
             eventDate: quotationData.eventDate,
             startTime: quotationData.startTime,
             endTime: quotationData.endTime,

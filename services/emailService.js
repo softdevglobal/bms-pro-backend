@@ -322,7 +322,10 @@ class EmailService {
   async sendQuotationEmail(quotationData, pdfBuffer) {
     try {
       const subject = `Quotation ${quotationData.id} - ${quotationData.eventType}`;
-      const message = `Dear ${quotationData.customerName},\n\nPlease find attached your quotation for ${quotationData.eventType} at Cranbourne Public Hall.\n\nEvent Details:\n- Date: ${new Date(quotationData.eventDate).toLocaleDateString()}\n- Time: ${quotationData.startTime} - ${quotationData.endTime}\n- Resource: ${quotationData.resource}\n- Total Amount: $${quotationData.totalAmount.toFixed(2)} AUD\n\nThis quotation is valid until ${new Date(quotationData.validUntil).toLocaleDateString()}.\n\nTo accept this quotation, please reply to this email or contact us directly.\n\nThank you for considering Cranbourne Public Hall for your event!`;
+      const depositLine = quotationData.depositType && quotationData.depositType !== 'None'
+        ? `\n- Deposit Amount: $${quotationData.depositAmount.toFixed(2)} AUD`
+        : '';
+      const message = `Dear ${quotationData.customerName},\n\nPlease find attached your quotation for ${quotationData.eventType} at Cranbourne Public Hall.\n\nEvent Details:\n- Date: ${new Date(quotationData.eventDate).toLocaleDateString()}\n- Time: ${quotationData.startTime} - ${quotationData.endTime}\n- Resource: ${quotationData.resource}\n- Total Amount: $${quotationData.totalAmount.toFixed(2)} AUD${depositLine}\n\nThis quotation is valid until ${new Date(quotationData.validUntil).toLocaleDateString()}.\n\nTo accept this quotation, please reply to this email or contact us directly.\n\nThank you for considering Cranbourne Public Hall for your event!`;
 
       const mailOptions = {
         from: 'dpawan434741@gmail.com',
@@ -402,6 +405,12 @@ class EmailService {
                   <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Total Amount:</td>
                   <td style="padding: 8px 0; color: #059669; font-weight: bold; font-size: 18px;">$${quotationData.totalAmount.toFixed(2)} AUD</td>
                 </tr>
+                ${quotationData.depositType && quotationData.depositType !== 'None' ? `
+                <tr>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Deposit Amount:</td>
+                  <td style="padding: 8px 0; color: #1e293b; font-weight: bold;">$${quotationData.depositAmount.toFixed(2)} AUD</td>
+                </tr>
+                ` : ''}
                 <tr>
                   <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Valid Until:</td>
                   <td style="padding: 8px 0; color: #1e293b;">${new Date(quotationData.validUntil).toLocaleDateString()}</td>
