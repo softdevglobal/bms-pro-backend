@@ -236,7 +236,8 @@ class EmailService {
         to: to,
         subject: emailContent.subject,
         html: emailContent.html,
-        text: emailContent.text
+        text: emailContent.text,
+        attachments: Array.isArray(emailData.attachments) ? emailData.attachments : undefined
       };
 
       console.log('📧 EmailService: Sending customized email...');

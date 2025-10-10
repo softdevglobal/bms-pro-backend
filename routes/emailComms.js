@@ -1,6 +1,8 @@
 const express = require('express');
 const admin = require('../firebaseAdmin');
 const emailService = require('../services/emailService');
+const multer = require('multer');
+const upload = multer();
 
 const router = express.Router();
 
@@ -31,8 +33,19 @@ const verifyToken = async (req, res, next) => {
 };
 
 // POST /api/email-comms/send - Send a customized email
-router.post('/send', verifyToken, async (req, res) => {
+router.post('/send', verifyToken, upload.any(), async (req, res) => {
   try {
+    // Support both JSON and multipart/form-data payloads
+    let bodySource = req.body || {};
+    if (typeof req.body.payload === 'string') {
+      try {
+        bodySource = JSON.parse(req.body.payload);
+      } catch (e) {
+        console.warn('Invalid JSON in payload string');
+        bodySource = {};
+      }
+    }
+
     const { 
       templateId, 
       recipientEmail, 
@@ -41,7 +54,7 @@ router.post('/send', verifyToken, async (req, res) => {
       customSubject, 
       customBody, 
       variables = {} 
-    } = req.body;
+    } = bodySource;
     const hallOwnerId = req.user.hallOwnerId || req.user.uid;
 
     // Validate required fields
@@ -58,6 +71,13 @@ router.post('/send', verifyToken, async (req, res) => {
       sentBy: req.user.uid,
       sentAt: admin.firestore.FieldValue.serverTimestamp()
     };
+
+    // Handle file attachments (multipart)
+    const attachments = (req.files || []).map(f => ({
+      filename: f.originalname,
+      content: f.buffer,
+      contentType: f.mimetype
+    }));
 
     // If using a template
     if (templateId) {
@@ -119,6 +139,10 @@ router.post('/send', verifyToken, async (req, res) => {
     }
 
     // Send email using the enhanced email service
+    if (attachments.length > 0) {
+      emailData.attachments = attachments;
+    }
+
     const emailResult = await emailService.sendCustomizedEmail(emailData);
 
     // Store email record in database
