@@ -132,8 +132,10 @@ async function generateInvoicePDF(invoiceData) {
          .fontSize(10)
          .font('Helvetica')
          .text(`Invoice Number: ${invoiceData.invoiceNumber}`, 50, 170)
-         .text(`Issue Date: ${invoiceData.issueDate ? new Date(invoiceData.issueDate).toLocaleDateString('en-AU') : new Date().toLocaleDateString('en-AU')}`, 50, 185)
-         .text(`Due Date: ${invoiceData.dueDate ? new Date(invoiceData.dueDate).toLocaleDateString('en-AU') : 'N/A'}`, 50, 200);
+         .text(`Issue Date: ${(invoiceData.issueDate?.toDate?.() || (invoiceData.issueDate instanceof Date ? invoiceData.issueDate : new Date())).toLocaleDateString('en-AU')}`
+           , 50, 185)
+         .text(`Due Date: ${(() => { const d = invoiceData.dueDate?.toDate?.() || (invoiceData.dueDate instanceof Date ? invoiceData.dueDate : null); return d ? d.toLocaleDateString('en-AU') : 'N/A'; })()}`
+           , 50, 200);
 
       // Customer details section
       doc.fillColor(primaryColor)
