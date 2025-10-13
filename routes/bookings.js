@@ -867,7 +867,7 @@ router.put('/:id/status', verifyToken, async (req, res) => {
     }
 
     const bookingData = bookingDoc.data();
-    const oldBookingData = { ...bookingData };
+    const oldBookingData = { id, ...bookingData };
     
     // Get user data to verify they are a hall_owner or sub_user
     const userDoc = await admin.firestore().collection('users').doc(userId).get();
@@ -916,7 +916,7 @@ router.put('/:id/status', verifyToken, async (req, res) => {
         userId,
         req.user.email,
         userData.role,
-        { ...bookingData, status: status },
+        { id, ...bookingData, status: status },
         ipAddress,
         hallId
       );
@@ -925,7 +925,7 @@ router.put('/:id/status', verifyToken, async (req, res) => {
         userId,
         req.user.email,
         userData.role,
-        oldBookingData,
+        { id, ...oldBookingData },
         'Status updated by hall owner',
         ipAddress,
         hallId
@@ -935,8 +935,8 @@ router.put('/:id/status', verifyToken, async (req, res) => {
         userId,
         req.user.email,
         userData.role,
-        oldBookingData,
-        newBookingData,
+        { id, ...oldBookingData },
+        { id, ...newBookingData },
         ipAddress,
         hallId
       );
@@ -1066,6 +1066,24 @@ router.put('/:id/price', verifyToken, async (req, res) => {
 
     // Update booking price
     await admin.firestore().collection('bookings').doc(id).update(updateData);
+
+    // Log booking price update in audit
+    try {
+      const AuditService = require('../services/auditService');
+      const userEmail = (req.user && (req.user.email || req.user.user_email)) || '';
+      const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
+      await AuditService.logBookingUpdated(
+        userId,
+        userEmail,
+        userData.role,
+        { id, ...bookingData },
+        { id, ...bookingData, ...updateData },
+        ipAddress,
+        actualHallOwnerId
+      );
+    } catch (auditErr) {
+      console.error('Audit log for price update failed (non-blocking):', auditErr.message);
+    }
 
     // Create notification and send email for the customer if they have a customerId and price was updated
     if (bookingData.customerId && bookingData.customerEmail && calculatedPrice !== undefined) {

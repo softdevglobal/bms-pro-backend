@@ -255,6 +255,8 @@ class AuditService {
   }
 
   static async logBookingUpdated(updaterId, updaterEmail, updaterRole, oldBooking, newBooking, ipAddress, hallId) {
+    const oldId = oldBooking?.id || oldBooking?.bookingId;
+    const newId = newBooking?.id || newBooking?.bookingId || oldId;
     const changes = {};
     
     const fieldsToCompare = ['status', 'customerName', 'eventDate', 'totalAmount', 'notes'];
@@ -275,7 +277,7 @@ class AuditService {
         userRole: updaterRole,
         action: 'booking_updated',
         targetType: 'booking',
-        target: `Booking ID: ${newBooking.id}`,
+        target: `Booking ID: ${newId}`,
         changes,
         ipAddress,
         hallId,
@@ -285,13 +287,14 @@ class AuditService {
   }
 
   static async logBookingCancelled(cancellerId, cancellerEmail, cancellerRole, booking, reason, ipAddress, hallId) {
+    const bookingId = booking?.id || booking?.bookingId;
     await this.logEvent({
       userId: cancellerId,
       userEmail: cancellerEmail,
       userRole: cancellerRole,
       action: 'booking_cancelled',
       targetType: 'booking',
-      target: `Booking ID: ${booking.id}`,
+      target: `Booking ID: ${bookingId}`,
       changes: {
         old: { status: booking.status },
         new: { status: 'cancelled' }
@@ -303,13 +306,14 @@ class AuditService {
   }
 
   static async logBookingConfirmed(confirmerId, confirmerEmail, confirmerRole, booking, ipAddress, hallId) {
+    const bookingId = booking?.id || booking?.bookingId;
     await this.logEvent({
       userId: confirmerId,
       userEmail: confirmerEmail,
       userRole: confirmerRole,
       action: 'booking_confirmed',
       targetType: 'booking',
-      target: `Booking ID: ${booking.id}`,
+      target: `Booking ID: ${bookingId}`,
       changes: {
         old: { status: booking.status },
         new: { status: 'confirmed' }
