@@ -488,8 +488,9 @@ router.post('/', verifyToken, async (req, res) => {
 
     // Calculate amounts
     const subtotal = parseFloat(amount);
-    const gst = calculateGST(subtotal);
-    const total = subtotal + gst;
+  // If client provides fullQuotedTotal for quotation bookings, compute GST on that amount
+  let gst = calculateGST(subtotal);
+  let total = subtotal + gst;
 
     // Check if this is a final invoice for a booking from quotation with deposit
     let finalTotal = total;
@@ -504,14 +505,21 @@ router.post('/', verifyToken, async (req, res) => {
       depositValue: bookingData.depositValue
     });
     
-    if (invoiceType === 'FINAL' && bookingData.bookingSource === 'quotation' && 
-        bookingData.depositType && bookingData.depositType !== 'None') {
-      depositPaid = bookingData.depositAmount || 0;
-      finalTotal = total - depositPaid;
+  if (invoiceType === 'FINAL' && bookingData.bookingSource === 'quotation' && 
+      bookingData.depositType && bookingData.depositType !== 'None') {
+    // Allow overriding GST base with the full quoted total if provided on payload
+    const fullQuotedTotal = req.body.fullQuotedTotal || bookingData.calculatedPrice || bookingData.totalAmount;
+    if (fullQuotedTotal && !Number.isNaN(Number(fullQuotedTotal))) {
+      const fullBase = parseFloat(fullQuotedTotal);
+      gst = calculateGST(fullBase);
+      total = fullBase + gst;
+    }
+    depositPaid = req.body.depositAmount !== undefined ? parseFloat(req.body.depositAmount) : (bookingData.depositAmount || 0);
+    finalTotal = total - depositPaid;
       depositInfo = {
-        type: bookingData.depositType,
-        value: bookingData.depositValue,
-        amount: depositPaid
+      type: req.body.depositType || bookingData.depositType,
+      value: req.body.depositValue !== undefined ? req.body.depositValue : bookingData.depositValue,
+      amount: depositPaid
       };
       
       console.log('Deposit applied to final invoice:', {
