@@ -452,49 +452,54 @@ router.get('/payments-due', verifyToken, async (req, res) => {
     const dateRanges = getDateRanges();
     const todayStr = dateRanges.today.toISOString().split('T')[0];
     
-    // Get confirmed bookings with calculated prices
-    const bookingsSnapshot = await admin.firestore()
-      .collection('bookings')
+    // Fetch invoices and compute accurate amounts due
+    const invoicesSnapshot = await admin.firestore()
+      .collection('invoices')
       .where('hallOwnerId', '==', dataUserId)
-      .where('status', '==', 'confirmed')
       .get();
 
-    const confirmedBookings = bookingsSnapshot.docs.map(doc => ({
+    const invoices = invoicesSnapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data(),
+      issueDate: doc.data().issueDate?.toDate?.() || null,
+      dueDate: doc.data().dueDate?.toDate?.() || null,
       createdAt: doc.data().createdAt?.toDate?.() || null,
       updatedAt: doc.data().updatedAt?.toDate?.() || null
     }));
 
-    // Transform to payments due format
-    const paymentsDue = confirmedBookings
-      .filter(booking => booking.calculatedPrice > 0)
-      .map(booking => {
-        const bookingDate = new Date(booking.bookingDate);
-        const daysDiff = Math.ceil((dateRanges.today - bookingDate) / (1000 * 60 * 60 * 24));
-        
-        let status = 'Due Today';
-        if (daysDiff > 0) {
-          status = 'Overdue';
-        } else if (daysDiff < 0) {
-          status = 'Upcoming';
-        }
-
+    const paymentsDue = invoices
+      .filter(inv => ['SENT', 'OVERDUE', 'PARTIAL', 'DRAFT'].includes(inv.status || 'SENT'))
+      .map(inv => {
+        const total = inv.finalTotal !== undefined && inv.finalTotal !== null ? inv.finalTotal : inv.total || 0;
+        const paid = inv.paidAmount || 0;
+        const amountDue = Math.max(0, total - paid);
         return {
-          invoice: `INV-${booking.id.substring(0, 8).toUpperCase()}`,
-          customer: booking.customerName,
-          type: 'FINAL', // Could be enhanced to track different payment types
-          amountAud: booking.calculatedPrice,
-          due: booking.bookingDate,
-          status: status,
-          bookingId: booking.id
+          invoice: inv.invoiceNumber || inv.id.substring(0, 8).toUpperCase(),
+          customer: inv.customer?.name || 'Unknown',
+          type: inv.invoiceType || 'INVOICE',
+          amountAud: amountDue,
+          due: inv.dueDate ? inv.dueDate.toISOString().split('T')[0] : null,
+          status: (() => {
+            const dueDate = inv.dueDate || null;
+            if (inv.status === 'OVERDUE') return 'Overdue';
+            if (dueDate) {
+              const dueStr = dueDate.toISOString().split('T')[0];
+              if (dueStr < todayStr) return 'Overdue';
+              if (dueStr === todayStr) return 'Due Today';
+            }
+            return 'Upcoming';
+          })(),
+          bookingId: inv.bookingId || null,
+          invoiceId: inv.id
         };
       })
+      .filter(p => p.amountAud > 0)
       .sort((a, b) => {
-        // Sort by due date, overdue first
         if (a.status === 'Overdue' && b.status !== 'Overdue') return -1;
         if (b.status === 'Overdue' && a.status !== 'Overdue') return 1;
-        return new Date(a.due) - new Date(b.due);
+        const ad = a.due ? new Date(a.due) : new Date(8640000000000000);
+        const bd = b.due ? new Date(b.due) : new Date(8640000000000000);
+        return ad - bd;
       });
 
     res.json({ payments: paymentsDue });
