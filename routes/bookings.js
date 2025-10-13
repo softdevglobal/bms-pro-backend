@@ -1182,6 +1182,194 @@ router.get('/:id', verifyToken, async (req, res) => {
   }
 });
 
+// PUT /api/bookings/:id - Update booking core fields (hall owner or sub-user)
+router.put('/:id', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.uid || req.user.user_id;
+    const {
+      customerName,
+      customerEmail,
+      customerPhone,
+      eventType,
+      selectedHall,
+      bookingDate,
+      startTime,
+      endTime,
+      additionalDescription,
+      guestCount,
+      status,
+      estimatedPrice
+    } = req.body;
+
+    // Get existing booking
+    const bookingRef = admin.firestore().collection('bookings').doc(id);
+    const bookingSnap = await bookingRef.get();
+    if (!bookingSnap.exists) {
+      return res.status(404).json({ message: 'Booking not found' });
+    }
+    const existing = bookingSnap.data();
+
+    // Permission: hall_owner or sub_user tied to same hallOwnerId
+    const userDoc = await admin.firestore().collection('users').doc(userId).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const userData = userDoc.data();
+
+    let permittedHallOwnerId = null;
+    if (userData.role === 'hall_owner') {
+      if (existing.hallOwnerId !== userId) {
+        return res.status(403).json({ message: 'Access denied. You can only update your own bookings.' });
+      }
+      permittedHallOwnerId = userId;
+    } else if (userData.role === 'sub_user') {
+      if (!userData.parentUserId || userData.parentUserId !== existing.hallOwnerId) {
+        return res.status(403).json({ message: 'Access denied. You can only update your parent hall owner\'s bookings.' });
+      }
+      permittedHallOwnerId = userData.parentUserId;
+    } else {
+      return res.status(403).json({ message: 'Access denied. Only hall owners and sub-users can update bookings.' });
+    }
+
+    const updateData = {};
+
+    // Validate and apply fields if present
+    if (customerName !== undefined) updateData.customerName = String(customerName).trim();
+    if (customerEmail !== undefined) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(customerEmail)) return res.status(400).json({ message: 'Invalid email format' });
+      updateData.customerEmail = customerEmail.trim().toLowerCase();
+    }
+    if (customerPhone !== undefined) {
+      const phoneRegex = /^[\+]?[1-9][\d]{0,15}$/;
+      if (!phoneRegex.test(String(customerPhone).replace(/[\s\-\(\)]/g, ''))) return res.status(400).json({ message: 'Invalid phone number format' });
+      updateData.customerPhone = String(customerPhone).trim();
+    }
+    if (eventType !== undefined) updateData.eventType = String(eventType).trim();
+    if (additionalDescription !== undefined) updateData.additionalDescription = String(additionalDescription || '').trim();
+    if (guestCount !== undefined) updateData.guestCount = guestCount ? parseInt(guestCount) : null;
+    if (status !== undefined) {
+      if (!['pending', 'confirmed', 'cancelled', 'completed'].includes(status)) {
+        return res.status(400).json({ message: 'Invalid status value' });
+      }
+      updateData.status = status;
+    }
+
+    let hallNameToSet = null;
+    const newSelectedHall = selectedHall !== undefined ? selectedHall : existing.selectedHall;
+    const newBookingDate = bookingDate !== undefined ? bookingDate : existing.bookingDate;
+    const newStartTime = startTime !== undefined ? startTime : existing.startTime;
+    const newEndTime = endTime !== undefined ? endTime : existing.endTime;
+
+    // If any date/time/resource changed, validate and conflict-check
+    const coreChanged = selectedHall !== undefined || bookingDate !== undefined || startTime !== undefined || endTime !== undefined;
+    if (coreChanged) {
+      // Validate date/time
+      const dateObj = new Date(newBookingDate);
+      if (isNaN(dateObj.getTime())) return res.status(400).json({ message: 'Invalid booking date format' });
+      const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+      if (!timeRegex.test(newStartTime) || !timeRegex.test(newEndTime)) return res.status(400).json({ message: 'Invalid time format' });
+      const st = new Date(`2000-01-01T${newStartTime}:00`);
+      const et = new Date(`2000-01-01T${newEndTime}:00`);
+      if (et <= st) return res.status(400).json({ message: 'End time must be after start time' });
+
+      // Verify hall exists and belongs to hall owner
+      const hallDoc = await admin.firestore().collection('resources').doc(newSelectedHall).get();
+      if (!hallDoc.exists) return res.status(404).json({ message: 'Selected hall not found' });
+      const hallData = hallDoc.data();
+      if (hallData.hallOwnerId !== permittedHallOwnerId) return res.status(400).json({ message: 'Selected hall does not belong to hall owner' });
+      hallNameToSet = hallData.name;
+
+      // Conflict check (exclude current booking)
+      const conflictsSnap = await admin.firestore()
+        .collection('bookings')
+        .where('hallOwnerId', '==', permittedHallOwnerId)
+        .where('selectedHall', '==', newSelectedHall)
+        .where('bookingDate', '==', newBookingDate)
+        .where('status', 'in', ['pending', 'confirmed'])
+        .get();
+
+      for (const d of conflictsSnap.docs) {
+        if (d.id === id) continue;
+        const b = d.data();
+        const es = new Date(`2000-01-01T${b.startTime}:00`);
+        const ee = new Date(`2000-01-01T${b.endTime}:00`);
+        if (st < ee && et > es) {
+          return res.status(409).json({ message: 'Time slot is already booked. Please choose a different time.' });
+        }
+      }
+
+      updateData.selectedHall = newSelectedHall;
+      updateData.hallName = hallNameToSet;
+      updateData.bookingDate = newBookingDate;
+      updateData.startTime = newStartTime;
+      updateData.endTime = newEndTime;
+    }
+
+    // Optionally recalc price when core changed
+    if (coreChanged) {
+      try {
+        let calculatedPrice = existing.calculatedPrice || 0;
+        let priceDetails = existing.priceDetails || null;
+
+        const pricingSnapshot = await admin.firestore()
+          .collection('pricing')
+          .where('hallOwnerId', '==', permittedHallOwnerId)
+          .where('resourceId', '==', newSelectedHall)
+          .get();
+        if (!pricingSnapshot.empty) {
+          const pricingData = pricingSnapshot.docs[0].data();
+          const stObj = new Date(`${newBookingDate}T${newStartTime}:00`);
+          const etObj = new Date(`${newBookingDate}T${newEndTime}:00`);
+          const hours = (etObj.getTime() - stObj.getTime()) / (1000 * 60 * 60);
+          const isWeekend = new Date(newBookingDate).getDay() === 0 || new Date(newBookingDate).getDay() === 6;
+          const rate = isWeekend ? pricingData.weekendRate : pricingData.weekdayRate;
+          calculatedPrice = pricingData.rateType === 'hourly' ? rate * hours : (hours >= 8 ? rate : rate * 0.5);
+          priceDetails = {
+            rateType: pricingData.rateType,
+            weekdayRate: pricingData.weekdayRate,
+            weekendRate: pricingData.weekendRate,
+            appliedRate: rate,
+            durationHours: hours,
+            isWeekend: isWeekend,
+            calculationMethod: pricingData.rateType === 'hourly' ? 'hourly' : 'daily',
+            frontendEstimatedPrice: estimatedPrice || null
+          };
+        } else if (estimatedPrice !== undefined) {
+          calculatedPrice = estimatedPrice || 0;
+        }
+
+        updateData.calculatedPrice = calculatedPrice;
+        updateData.priceDetails = priceDetails;
+      } catch (priceErr) {
+        console.error('Price recalculation failed (non-blocking):', priceErr.message);
+        if (estimatedPrice !== undefined) updateData.calculatedPrice = estimatedPrice || 0;
+      }
+    }
+
+    updateData.updatedAt = admin.firestore.FieldValue.serverTimestamp();
+    await bookingRef.update(updateData);
+
+    const updatedSnap = await bookingRef.get();
+    const updated = updatedSnap.data();
+
+    res.json({
+      message: 'Booking updated successfully',
+      booking: {
+        id,
+        ...updated,
+        createdAt: updated.createdAt?.toDate?.() || null,
+        updatedAt: updated.updatedAt?.toDate?.() || null
+      }
+    });
+
+  } catch (error) {
+    console.error('Error updating booking:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // GET /api/bookings/unavailable-dates/:hallOwnerId - Get unavailable dates for calendar (public endpoint)
 router.get('/unavailable-dates/:hallOwnerId', async (req, res) => {
   try {
