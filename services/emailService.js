@@ -138,14 +138,26 @@ class EmailService {
             ` : ''}
             ${data.calculatedPrice ? `
             <tr>
-              <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Price:</td>
-              <td style="padding: 8px 0; color: #059669; font-weight: bold;">$${data.calculatedPrice.toFixed(2)}</td>
+              <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Subtotal:</td>
+              <td style="padding: 8px 0; color: #1e293b;">$${data.calculatedPrice.toFixed(2)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; color: #64748b; font-weight: bold;">GST (10%):</td>
+              <td style="padding: 8px 0; color: #1e293b;">$${(data.calculatedPrice * 0.1).toFixed(2)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Total Amount (incl. GST):</td>
+              <td style="padding: 8px 0; color: #059669; font-weight: bold; font-size: 18px;">$${(data.calculatedPrice * 1.1).toFixed(2)} AUD</td>
             </tr>
             ` : ''}
             ${Number(data.depositAmount) > 0 ? `
             <tr style="background-color: #dbeafe;">
-              <td style="padding: 8px 0; color: #1e40af; font-weight: bold;">Deposit:</td>
-              <td style="padding: 8px 0; color: #1e40af; font-weight: bold;">$${Number(data.depositAmount).toFixed(2)} (GST incl.)</td>
+              <td style="padding: 12px 8px; color: #1e40af; font-weight: bold; font-size: 16px;">💰 Deposit (GST incl.):</td>
+              <td style="padding: 12px 8px; color: #1e40af; font-weight: bold; font-size: 16px;">$${Number(data.depositAmount).toFixed(2)} AUD</td>
+            </tr>
+            <tr style="background-color: #dcfce7; border: 2px solid #22c55e;">
+              <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 18px;">💳 Balance Due:</td>
+              <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 18px;">$${(data.calculatedPrice * 1.1 - Number(data.depositAmount)).toFixed(2)} AUD</td>
             </tr>
             ` : ''}
           </table>

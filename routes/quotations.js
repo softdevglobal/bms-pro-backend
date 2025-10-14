@@ -400,12 +400,16 @@ router.post('/', verifyToken, async (req, res) => {
     // Generate quotation ID
     const quotationId = `QUO-${Date.now().toString().slice(-6)}`;
 
-    // Calculate deposit amount
+    // Calculate deposit amount (GST-inclusive for consistency with booking confirmations)
     let depositAmount = 0;
     if (depositType === 'Fixed') {
+      // Fixed deposits are already GST-inclusive as entered by the user
       depositAmount = parseFloat(depositValue);
     } else if (depositType === 'Percentage') {
-      depositAmount = (parseFloat(totalAmount) * parseFloat(depositValue)) / 100;
+      // For percentage deposits, calculate on GST-inclusive amount
+      const gstRate = 0.1;
+      const totalAmountInclGst = parseFloat(totalAmount) * (1 + gstRate);
+      depositAmount = Math.round((totalAmountInclGst * parseFloat(depositValue) / 100) * 100) / 100;
     }
 
     // Create quotation data
