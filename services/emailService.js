@@ -881,7 +881,8 @@ class EmailService {
       
       // Add deposit and final price information
       if (invoiceData.depositPaid > 0) {
-        message += `\n\n💰 PAYMENT BREAKDOWN:\n- Subtotal: $${invoiceData.subtotal.toFixed(2)} AUD\n- GST (10%): $${invoiceData.gst.toFixed(2)} AUD\n- Total Amount: $${invoiceData.total.toFixed(2)} AUD\n- 💰 Deposit Already Paid: $${invoiceData.depositPaid.toFixed(2)} AUD\n\n💳 AMOUNT YOU NEED TO PAY: $${invoiceData.finalTotal.toFixed(2)} AUD\n\nCalculation: $${invoiceData.total.toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)} AUD`;
+        const fullAmount = invoiceData.fullAmountWithGST || invoiceData.total;
+        message += `\n\n💰 PAYMENT BREAKDOWN:\n- Full Amount (with GST): $${fullAmount.toFixed(2)} AUD\n- 💰 Deposit Already Paid: $${invoiceData.depositPaid.toFixed(2)} AUD\n\n💳 FINAL PAYMENT DUE: $${invoiceData.finalTotal.toFixed(2)} AUD\n\nCalculation: $${fullAmount.toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)} AUD`;
       } else {
         message += `\n\n💳 AMOUNT YOU NEED TO PAY: $${invoiceData.total.toFixed(2)} AUD`;
       }
@@ -972,6 +973,20 @@ class EmailService {
                   <td style="padding: 8px 0; color: #1e293b;">${invoiceData.quotationId}</td>
                 </tr>
                 ` : ''}
+                ${invoiceData.depositPaid > 0 ? `
+                <tr>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Full Amount (with GST):</td>
+                  <td style="padding: 8px 0; color: #1e293b;">$${(invoiceData.fullAmountWithGST || invoiceData.total).toFixed(2)} AUD</td>
+                </tr>
+                <tr style="background-color: #dbeafe;">
+                  <td style="padding: 12px 8px; color: #1e40af; font-weight: bold; font-size: 16px;">💰 Deposit Already Paid:</td>
+                  <td style="padding: 12px 8px; color: #1e40af; font-weight: bold; font-size: 16px;">-$${invoiceData.depositPaid.toFixed(2)} AUD</td>
+                </tr>
+                <tr style="background-color: #dcfce7; border: 2px solid #22c55e;">
+                  <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 20px;">💳 Final Payment Due:</td>
+                  <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 20px;">$${invoiceData.finalTotal.toFixed(2)} AUD</td>
+                </tr>
+                ` : `
                 <tr>
                   <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Subtotal:</td>
                   <td style="padding: 8px 0; color: #1e293b;">$${invoiceData.subtotal.toFixed(2)}</td>
@@ -980,20 +995,6 @@ class EmailService {
                   <td style="padding: 8px 0; color: #64748b; font-weight: bold;">GST (10%):</td>
                   <td style="padding: 8px 0; color: #1e293b;">$${invoiceData.gst.toFixed(2)}</td>
                 </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Total Amount:</td>
-                  <td style="padding: 8px 0; color: #1e293b;">$${invoiceData.total.toFixed(2)}</td>
-                </tr>
-                ${invoiceData.depositPaid > 0 ? `
-                <tr style="background-color: #dbeafe;">
-                  <td style="padding: 12px 8px; color: #1e40af; font-weight: bold; font-size: 16px;">💰 Deposit Already Paid:</td>
-                  <td style="padding: 12px 8px; color: #1e40af; font-weight: bold; font-size: 16px;">-$${invoiceData.depositPaid.toFixed(2)} AUD</td>
-                </tr>
-                <tr style="background-color: #dcfce7; border: 2px solid #22c55e;">
-                  <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 20px;">💳 Amount You Need to Pay:</td>
-                  <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 20px;">$${invoiceData.finalTotal.toFixed(2)} AUD</td>
-                </tr>
-                ` : `
                 <tr style="background-color: #dcfce7; border: 2px solid #22c55e;">
                   <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 20px;">💳 Amount Due:</td>
                   <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 20px;">$${invoiceData.total.toFixed(2)} AUD</td>
@@ -1081,7 +1082,8 @@ class EmailService {
       
       // Add deposit and final price information
       if (invoiceData.depositPaid > 0) {
-        message += `\n\n💰 PAYMENT BREAKDOWN:\n- Subtotal: $${invoiceData.subtotal.toFixed(2)} AUD\n- GST (10%): $${invoiceData.gst.toFixed(2)} AUD\n- Total Amount: $${invoiceData.total.toFixed(2)} AUD\n- 💰 Deposit Already Paid: $${invoiceData.depositPaid.toFixed(2)} AUD\n\n💳 AMOUNT YOU NEED TO PAY: $${invoiceData.finalTotal.toFixed(2)} AUD\n\nCalculation: $${invoiceData.total.toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)} AUD`;
+        const fullAmount = invoiceData.fullAmountWithGST || invoiceData.total;
+        message += `\n\n💰 PAYMENT BREAKDOWN:\n- Full Amount (with GST): $${fullAmount.toFixed(2)} AUD\n- 💰 Deposit Already Paid: $${invoiceData.depositPaid.toFixed(2)} AUD\n\n💳 FINAL PAYMENT DUE: $${invoiceData.finalTotal.toFixed(2)} AUD\n\nCalculation: $${fullAmount.toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)} AUD`;
       } else {
         message += `\n\n💳 AMOUNT YOU NEED TO PAY: $${invoiceData.total.toFixed(2)} AUD`;
       }
@@ -1271,6 +1273,20 @@ class EmailService {
             <div style="background-color: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 8px; padding: 20px; margin: 20px 0;">
               <h3 style="color: #0c4a6e; margin: 0 0 15px 0;">Payment Breakdown</h3>
               <table style="width: 100%; border-collapse: collapse;">
+                ${invoiceData.depositPaid > 0 ? `
+                <tr>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Full Amount (with GST):</td>
+                  <td style="padding: 8px 0; color: #1e293b; text-align: right;">$${(invoiceData.fullAmountWithGST || invoiceData.total).toFixed(2)} AUD</td>
+                </tr>
+                <tr style="background-color: #dbeafe;">
+                  <td style="padding: 12px 8px; color: #1e40af; font-weight: bold; font-size: 16px;">💰 Deposit Already Paid:</td>
+                  <td style="padding: 12px 8px; color: #1e40af; font-weight: bold; font-size: 16px; text-align: right;">-$${invoiceData.depositPaid.toFixed(2)} AUD</td>
+                </tr>
+                <tr style="background-color: #dcfce7; border: 2px solid #22c55e;">
+                  <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 20px;">💳 Final Payment Due:</td>
+                  <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 20px; text-align: right;">$${invoiceData.finalTotal.toFixed(2)} AUD</td>
+                </tr>
+                ` : `
                 <tr>
                   <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Subtotal:</td>
                   <td style="padding: 8px 0; color: #1e293b; text-align: right;">$${invoiceData.subtotal.toFixed(2)}</td>
@@ -1279,20 +1295,6 @@ class EmailService {
                   <td style="padding: 8px 0; color: #64748b; font-weight: bold;">GST (10%):</td>
                   <td style="padding: 8px 0; color: #1e293b; text-align: right;">$${invoiceData.gst.toFixed(2)}</td>
                 </tr>
-                <tr>
-                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Total Amount:</td>
-                  <td style="padding: 8px 0; color: #1e293b; text-align: right;">$${invoiceData.total.toFixed(2)}</td>
-                </tr>
-                ${invoiceData.depositPaid > 0 ? `
-                <tr style="background-color: #dbeafe;">
-                  <td style="padding: 12px 8px; color: #1e40af; font-weight: bold; font-size: 16px;">💰 Deposit Already Paid:</td>
-                  <td style="padding: 12px 8px; color: #1e40af; font-weight: bold; font-size: 16px; text-align: right;">-$${invoiceData.depositPaid.toFixed(2)} AUD</td>
-                </tr>
-                <tr style="background-color: #dcfce7; border: 2px solid #22c55e;">
-                  <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 20px;">💳 Amount You Need to Pay:</td>
-                  <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 20px; text-align: right;">$${invoiceData.finalTotal.toFixed(2)} AUD</td>
-                </tr>
-                ` : `
                 <tr style="background-color: #dcfce7; border: 2px solid #22c55e;">
                   <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 20px;">💳 Amount Due:</td>
                   <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 20px; text-align: right;">$${invoiceData.total.toFixed(2)} AUD</td>

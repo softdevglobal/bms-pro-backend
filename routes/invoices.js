@@ -256,28 +256,34 @@ async function generateInvoicePDF(invoiceData) {
          .fill('#ffffff')
          .stroke(secondaryColor, 1);
       
-      doc.fillColor(darkGray)
-         .fontSize(11)
-         .font('Helvetica')
-         .text('Subtotal:', 360, currentY + 10)
-         .text(`$${invoiceData.subtotal.toFixed(2)}`, 500, currentY + 10, { width: 45, align: 'right' })
-         .text('GST (10%):', 360, currentY + 25)
-         .text(`$${invoiceData.gst.toFixed(2)}`, 500, currentY + 25, { width: 45, align: 'right' });
-      
-      // Add deposit information if applicable
+      // Show different breakdown based on whether there's a deposit
       if (invoiceData.depositPaid > 0) {
-        doc.text('Total Amount:', 360, currentY + 40)
-           .text(`$${invoiceData.total.toFixed(2)}`, 500, currentY + 40, { width: 45, align: 'right' })
-           .text('Deposit Paid:', 360, currentY + 55)
-           .text(`-$${invoiceData.depositPaid.toFixed(2)}`, 500, currentY + 55, { width: 45, align: 'right' });
+        // For invoices with deposits, show full amount with GST, deposit, and final payment
+        const fullAmount = invoiceData.fullAmountWithGST || invoiceData.total;
+        doc.fillColor(darkGray)
+           .fontSize(11)
+           .font('Helvetica')
+           .text('Full Amount (with GST):', 360, currentY + 10)
+           .text(`$${fullAmount.toFixed(2)}`, 500, currentY + 10, { width: 45, align: 'right' })
+           .text('Deposit Paid:', 360, currentY + 25)
+           .text(`-$${invoiceData.depositPaid.toFixed(2)}`, 500, currentY + 25, { width: 45, align: 'right' });
         
         // Add calculation explanation
         doc.fillColor(secondaryColor)
            .fontSize(8)
            .font('Helvetica')
-           .text(`Calculation: $${invoiceData.total.toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)}`, 360, currentY + 70, { width: 185, align: 'center' });
+           .text(`Calculation: $${fullAmount.toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)}`, 360, currentY + 40, { width: 185, align: 'center' });
         
         currentY += 30; // Extra space for deposit line and calculation
+      } else {
+        // For invoices without deposits, show normal breakdown
+        doc.fillColor(darkGray)
+           .fontSize(11)
+           .font('Helvetica')
+           .text('Subtotal:', 360, currentY + 10)
+           .text(`$${invoiceData.subtotal.toFixed(2)}`, 500, currentY + 10, { width: 45, align: 'right' })
+           .text('GST (10%):', 360, currentY + 25)
+           .text(`$${invoiceData.gst.toFixed(2)}`, 500, currentY + 25, { width: 45, align: 'right' });
       }
       
       doc.rect(350, currentY + 40, 205, 40)
@@ -286,7 +292,7 @@ async function generateInvoicePDF(invoiceData) {
       doc.fillColor('#ffffff')
          .fontSize(16)
          .font('Helvetica-Bold')
-         .text('FINAL AMOUNT', 360, currentY + 50)
+         .text(invoiceData.depositPaid > 0 ? 'FINAL PAYMENT DUE' : 'FINAL AMOUNT', 360, currentY + 50)
          .fontSize(20)
          .text(`$${invoiceData.finalTotal.toFixed(2)} AUD`, 360, currentY + 65, { width: 185, align: 'right' });
 
@@ -304,7 +310,7 @@ async function generateInvoicePDF(invoiceData) {
         doc.fillColor('#475569')
            .fontSize(10)
            .font('Helvetica')
-           .text(invoiceData.calculationBreakdown?.formula || `Final Amount = $${invoiceData.total.toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)}`, 60, currentY + 130, { width: 485 });
+           .text(invoiceData.calculationBreakdown?.formula || `Final Payment = $${(invoiceData.fullAmountWithGST || invoiceData.total).toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)}`, 60, currentY + 130, { width: 485 });
       }
 
       // Deposit information section (if applicable)
@@ -486,16 +492,17 @@ router.post('/', verifyToken, async (req, res) => {
       });
     }
 
-    // Calculate amounts
+    // Calculate amounts - GST is already included in booking amounts, so we don't add it again
     const subtotal = parseFloat(amount);
-  // If client provides fullQuotedTotal for quotation bookings, compute GST on that amount
-  let gst = calculateGST(subtotal);
-  let total = subtotal + gst;
-
-    // Check if this is a final invoice for a booking from quotation with deposit
+    
+    // For invoices, the amounts already include GST from booking creation
+    // We need to show the breakdown: full amount with GST, deposit amount, and final payment
+    let gst = 0;
+    let total = subtotal; // Total already includes GST
     let finalTotal = total;
     let depositPaid = 0;
     let depositInfo = null;
+    let fullAmountWithGST = subtotal; // This is the full booking amount with GST already included
     
     console.log('Invoice creation - checking deposit info:', {
       invoiceType,
@@ -505,31 +512,44 @@ router.post('/', verifyToken, async (req, res) => {
       depositValue: bookingData.depositValue
     });
     
-  // Apply deposit deduction on FINAL invoices whenever booking has a deposit, regardless of source
-  if (invoiceType === 'FINAL' && bookingData.depositType && bookingData.depositType !== 'None') {
-    // Allow overriding GST base with the full quoted total if provided on payload
-    const fullQuotedTotal = req.body.fullQuotedTotal || bookingData.calculatedPrice || bookingData.totalAmount;
-    if (fullQuotedTotal && !Number.isNaN(Number(fullQuotedTotal))) {
-      const fullBase = parseFloat(fullQuotedTotal);
-      gst = calculateGST(fullBase);
-      total = fullBase + gst;
-    }
-    depositPaid = req.body.depositAmount !== undefined ? parseFloat(req.body.depositAmount) : (bookingData.depositAmount || 0);
-    finalTotal = total - depositPaid;
+    // Apply deposit deduction on FINAL invoices whenever booking has a deposit, regardless of source
+    if (invoiceType === 'FINAL' && bookingData.depositType && bookingData.depositType !== 'None') {
+      // Get the full quoted total (already includes GST)
+      const fullQuotedTotal = req.body.fullQuotedTotal || bookingData.calculatedPrice || bookingData.totalAmount;
+      if (fullQuotedTotal && !Number.isNaN(Number(fullQuotedTotal))) {
+        fullAmountWithGST = parseFloat(fullQuotedTotal);
+        total = fullAmountWithGST;
+      }
+      
+      // Calculate GST from the full amount (reverse calculation)
+      // If fullAmountWithGST = subtotal + GST, then GST = fullAmountWithGST - subtotal
+      // But since we know GST is 10%, we can calculate: GST = fullAmountWithGST / 1.1 * 0.1
+      const baseAmount = fullAmountWithGST / 1.1; // Remove GST to get base amount
+      gst = fullAmountWithGST - baseAmount; // Calculate GST amount
+      
+      depositPaid = req.body.depositAmount !== undefined ? parseFloat(req.body.depositAmount) : (bookingData.depositAmount || 0);
+      finalTotal = total - depositPaid;
+      
       depositInfo = {
-      type: req.body.depositType || bookingData.depositType,
-      value: req.body.depositValue !== undefined ? req.body.depositValue : bookingData.depositValue,
-      amount: depositPaid
+        type: req.body.depositType || bookingData.depositType,
+        value: req.body.depositValue !== undefined ? req.body.depositValue : bookingData.depositValue,
+        amount: depositPaid
       };
       
-      console.log('Deposit applied to final invoice:', {
-        originalTotal: total,
+      console.log('Final invoice with deposit:', {
+        fullAmountWithGST: fullAmountWithGST,
+        baseAmount: baseAmount,
+        gst: gst,
         depositPaid: depositPaid,
         finalTotal: finalTotal,
         depositInfo: depositInfo
       });
     } else if (invoiceType === 'DEPOSIT' && bookingData.depositType && bookingData.depositType !== 'None') {
-      // For deposit invoices, the amount should match the deposit amount
+      // For deposit invoices, the amount already includes GST
+      // Calculate GST from the deposit amount
+      const baseAmount = subtotal / 1.1; // Remove GST to get base amount
+      gst = subtotal - baseAmount; // Calculate GST amount
+      
       const expectedDepositAmount = bookingData.depositAmount || 0;
       if (Math.abs(parseFloat(amount) - expectedDepositAmount) > 0.01) {
         console.log('Warning: Deposit invoice amount does not match expected deposit amount:', {
@@ -537,6 +557,25 @@ router.post('/', verifyToken, async (req, res) => {
           expectedDepositAmount: expectedDepositAmount
         });
       }
+      
+      console.log('Deposit invoice:', {
+        subtotal: subtotal,
+        baseAmount: baseAmount,
+        gst: gst,
+        total: total
+      });
+    } else {
+      // For other invoice types, calculate GST normally
+      const baseAmount = subtotal / 1.1; // Remove GST to get base amount
+      gst = subtotal - baseAmount; // Calculate GST amount
+      total = subtotal;
+      
+      console.log('Other invoice type:', {
+        subtotal: subtotal,
+        baseAmount: baseAmount,
+        gst: gst,
+        total: total
+      });
     }
 
     // Create invoice data
@@ -559,6 +598,7 @@ router.post('/', verifyToken, async (req, res) => {
       subtotal: subtotal,
       gst: gst,
       total: total,
+      fullAmountWithGST: fullAmountWithGST, // Full booking amount with GST included
       finalTotal: finalTotal, // Final amount after deposit deduction
       depositPaid: depositPaid, // Amount already paid as deposit
       depositInfo: depositInfo, // Deposit details
@@ -566,9 +606,10 @@ router.post('/', verifyToken, async (req, res) => {
         quotationTotal: subtotal,
         gstAmount: gst,
         totalWithGST: total,
+        fullAmountWithGST: fullAmountWithGST,
         depositDeduction: depositPaid,
         finalAmount: finalTotal,
-        formula: depositPaid > 0 ? `Final Amount = (${subtotal} + ${gst}) - ${depositPaid} = ${finalTotal}` : `Final Amount = ${subtotal} + ${gst} = ${total}`
+        formula: depositPaid > 0 ? `Final Amount = ${fullAmountWithGST} - ${depositPaid} = ${finalTotal}` : `Final Amount = ${total}`
       },
       paidAmount: 0,
       status: 'DRAFT',
