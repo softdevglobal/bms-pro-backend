@@ -108,7 +108,7 @@ class EmailService {
     let actionButton = '';
     let bookingDetails = '';
     
-    // Add booking details if available
+      // Add booking details if available
     if (data && data.bookingId) {
       bookingDetails = `
         <div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; margin: 20px 0;">
@@ -140,6 +140,12 @@ class EmailService {
             <tr>
               <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Price:</td>
               <td style="padding: 8px 0; color: #059669; font-weight: bold;">$${data.calculatedPrice.toFixed(2)}</td>
+            </tr>
+            ` : ''}
+            ${Number(data.depositAmount) > 0 ? `
+            <tr style="background-color: #dbeafe;">
+              <td style="padding: 8px 0; color: #1e40af; font-weight: bold;">Deposit:</td>
+              <td style="padding: 8px 0; color: #1e40af; font-weight: bold;">$${Number(data.depositAmount).toFixed(2)} (GST incl.)</td>
             </tr>
             ` : ''}
           </table>

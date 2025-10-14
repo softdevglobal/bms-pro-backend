@@ -850,6 +850,8 @@ router.put('/:id/status', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
+    // Optional deposit meta when confirming a booking
+    let { depositType, depositValue, depositAmount } = req.body;
     const userId = req.user.uid;
     const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
 
@@ -900,11 +902,52 @@ router.put('/:id/status', verifyToken, async (req, res) => {
       return res.status(403).json({ message: 'Access denied. Only hall owners and sub-users can update booking status.' });
     }
 
-    // Update booking status
-    await admin.firestore().collection('bookings').doc(id).update({
+    // Compute/validate deposit information if provided when confirming
+    const updatePayload = {
       status: status,
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
+    };
+
+    if (status === 'confirmed') {
+      // Normalize deposit type casing
+      if (typeof depositType === 'string') {
+        const t = String(depositType);
+        if (['Fixed', 'Percentage', 'None'].includes(t)) {
+          depositType = t;
+        } else {
+          depositType = undefined;
+        }
+      }
+
+      // If deposit provided, ensure GST-inclusive amount is stored
+      if (depositType && depositType !== 'None') {
+        const gstRate = 0.1;
+        const bookingBase = Number(bookingData.calculatedPrice || 0);
+        const baseInclGst = Math.round((bookingBase * (1 + gstRate)) * 100) / 100;
+
+        if (depositType === 'Percentage') {
+          const pct = Number(depositValue);
+          if (!Number.isNaN(pct) && pct > 0) {
+            const computed = Math.round((baseInclGst * (Math.max(0, Math.min(100, pct)) / 100)) * 100) / 100;
+            depositAmount = Number.isFinite(Number(depositAmount)) && Number(depositAmount) > 0 ? Number(depositAmount) : computed;
+            updatePayload.depositType = 'Percentage';
+            updatePayload.depositValue = pct;
+            updatePayload.depositAmount = depositAmount;
+          }
+        } else if (depositType === 'Fixed') {
+          const amt = Number(depositAmount ?? depositValue);
+          if (!Number.isNaN(amt) && amt > 0) {
+            // Treat provided amount as GST-inclusive as per requirement
+            updatePayload.depositType = 'Fixed';
+            updatePayload.depositAmount = Math.round(amt * 100) / 100;
+            updatePayload.depositValue = null;
+          }
+        }
+      }
+    }
+
+    // Update booking status (and optional deposit fields)
+    await admin.firestore().collection('bookings').doc(id).update(updatePayload);
 
     // Log booking status update
     const AuditService = require('../services/auditService');
@@ -942,28 +985,37 @@ router.put('/:id/status', verifyToken, async (req, res) => {
       );
     }
 
-    // Create notification and send email for the customer if they have a customerId
-    if (bookingData.customerId && bookingData.customerEmail) {
+    // Create notification and send email to the customer when status changes
+    // For authenticated customers (with customerId), create a DB notification and email.
+    // For guests (no customerId), just send the email (skip DB notification).
+    if (bookingData.customerEmail) {
       try {
         let notificationTitle = '';
         let notificationMessage = '';
-        
+        // Use updated booking data (including deposit fields if set above) for email composition
+        const bookingForEmail = { ...bookingData, ...updatePayload };
+
         switch (status) {
           case 'confirmed':
             notificationTitle = 'Booking Confirmed!';
-            notificationMessage = `Great news! Your booking for ${bookingData.eventType} on ${bookingData.bookingDate} has been confirmed. We look forward to hosting your event!`;
+            // Include deposit info if present on booking
+            if (bookingForEmail.depositType && bookingForEmail.depositType !== 'None' && bookingForEmail.depositAmount) {
+              notificationMessage = `Great news! Your booking for ${bookingForEmail.eventType} on ${bookingForEmail.bookingDate} has been confirmed. A deposit of $${Number(bookingForEmail.depositAmount).toFixed(2)} (GST inclusive) is recorded and will be deducted from your final bill. We look forward to hosting your event!`;
+            } else {
+              notificationMessage = `Great news! Your booking for ${bookingForEmail.eventType} on ${bookingForEmail.bookingDate} has been confirmed. We look forward to hosting your event!`;
+            }
             break;
           case 'cancelled':
             notificationTitle = 'Booking Cancelled';
-            notificationMessage = `Your booking for ${bookingData.eventType} on ${bookingData.bookingDate} has been cancelled. Please contact us if you have any questions.`;
+            notificationMessage = `Your booking for ${bookingForEmail.eventType} on ${bookingForEmail.bookingDate} has been cancelled. Please contact us if you have any questions.`;
             break;
           case 'completed':
             notificationTitle = 'Event Completed';
-            notificationMessage = `Thank you for choosing us! Your ${bookingData.eventType} event on ${bookingData.bookingDate} has been completed. We hope you had a wonderful time!`;
+            notificationMessage = `Thank you for choosing us! Your ${bookingForEmail.eventType} event on ${bookingForEmail.bookingDate} has been completed. We hope you had a wonderful time!`;
             break;
           default:
             notificationTitle = 'Booking Status Updated';
-            notificationMessage = `Your booking for ${bookingData.eventType} on ${bookingData.bookingDate} status has been updated to ${status}.`;
+            notificationMessage = `Your booking for ${bookingForEmail.eventType} on ${bookingForEmail.bookingDate} status has been updated to ${status}.`;
         }
 
         const notificationData = {
@@ -972,18 +1024,28 @@ router.put('/:id/status', verifyToken, async (req, res) => {
           message: notificationMessage,
           data: {
             bookingId: id,
-            eventType: bookingData.eventType,
-            bookingDate: bookingData.bookingDate,
-            startTime: bookingData.startTime,
-            endTime: bookingData.endTime,
+            eventType: bookingForEmail.eventType,
+            bookingDate: bookingForEmail.bookingDate,
+            startTime: bookingForEmail.startTime,
+            endTime: bookingForEmail.endTime,
             status: status,
-            hallName: bookingData.hallName,
-            calculatedPrice: bookingData.calculatedPrice
+            hallName: bookingForEmail.hallName,
+            calculatedPrice: bookingForEmail.calculatedPrice,
+            // Surface deposit details for email rendering if present
+            depositType: bookingForEmail.depositType || 'None',
+            depositValue: bookingForEmail.depositValue || 0,
+            depositAmount: bookingForEmail.depositAmount || 0
           }
         };
 
-        await createNotificationAndSendEmail(bookingData.customerId, bookingData.customerEmail, notificationData);
-        console.log('Notification and email sent for customer status update:', bookingData.customerId);
+        if (bookingData.customerId) {
+          await createNotificationAndSendEmail(bookingData.customerId, bookingData.customerEmail, notificationData);
+          console.log('Notification and email sent for customer status update:', bookingData.customerId);
+        } else {
+          // Guest booking: send email directly (no DB notification userId)
+          await emailService.sendNotificationEmail(notificationData, bookingData.customerEmail);
+          console.log('Email sent for guest customer (no customerId) on status update');
+        }
       } catch (notificationError) {
         console.error('Error creating notification:', notificationError);
         // Don't fail the booking update if notification creation fails

@@ -505,8 +505,8 @@ router.post('/', verifyToken, async (req, res) => {
       depositValue: bookingData.depositValue
     });
     
-  if (invoiceType === 'FINAL' && bookingData.bookingSource === 'quotation' && 
-      bookingData.depositType && bookingData.depositType !== 'None') {
+  // Apply deposit deduction on FINAL invoices whenever booking has a deposit, regardless of source
+  if (invoiceType === 'FINAL' && bookingData.depositType && bookingData.depositType !== 'None') {
     // Allow overriding GST base with the full quoted total if provided on payload
     const fullQuotedTotal = req.body.fullQuotedTotal || bookingData.calculatedPrice || bookingData.totalAmount;
     if (fullQuotedTotal && !Number.isNaN(Number(fullQuotedTotal))) {
@@ -528,8 +528,7 @@ router.post('/', verifyToken, async (req, res) => {
         finalTotal: finalTotal,
         depositInfo: depositInfo
       });
-    } else if (invoiceType === 'DEPOSIT' && bookingData.bookingSource === 'quotation' && 
-               bookingData.depositType && bookingData.depositType !== 'None') {
+    } else if (invoiceType === 'DEPOSIT' && bookingData.depositType && bookingData.depositType !== 'None') {
       // For deposit invoices, the amount should match the deposit amount
       const expectedDepositAmount = bookingData.depositAmount || 0;
       if (Math.abs(parseFloat(amount) - expectedDepositAmount) > 0.01) {
