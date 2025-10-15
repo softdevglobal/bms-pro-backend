@@ -380,10 +380,28 @@ class EmailService {
   async sendQuotationEmail(quotationData, pdfBuffer) {
     try {
       const subject = `Quotation ${quotationData.id} - ${quotationData.eventType}`;
+      const ratePct = Number.isFinite(Number(quotationData.taxRate)) ? Number(quotationData.taxRate) : 10;
+      const rate = ratePct / 100;
+      const isInclusive = quotationData.taxType === 'Exclusive' ? false : true;
+      const rawTotal = Number(quotationData.totalAmount || 0);
+      const subtotal = Number.isFinite(Number(quotationData.subtotal))
+        ? Number(quotationData.subtotal)
+        : (isInclusive ? Math.round((rawTotal / (1 + rate)) * 100) / 100 : Math.round(rawTotal * 100) / 100);
+      const gst = Number.isFinite(Number(quotationData.gst))
+        ? Number(quotationData.gst)
+        : (isInclusive ? Math.round((rawTotal - subtotal) * 100) / 100 : Math.round((subtotal * rate) * 100) / 100);
+      const totalInclGst = Number.isFinite(Number(quotationData.totalInclGst))
+        ? Number(quotationData.totalInclGst)
+        : (isInclusive ? Math.round(rawTotal * 100) / 100 : Math.round((subtotal + gst) * 100) / 100);
+      const depositAmount = Number(quotationData.depositAmount || 0);
+      const finalAmount = Number.isFinite(Number(quotationData.finalAmount))
+        ? Number(quotationData.finalAmount)
+        : Math.max(0, Math.round((totalInclGst - depositAmount) * 100) / 100);
+
       const depositLine = quotationData.depositType && quotationData.depositType !== 'None'
-        ? `\n- Deposit Amount: $${quotationData.depositAmount.toFixed(2)} AUD`
+        ? `\n- Deposit: $${depositAmount.toFixed(2)} AUD`
         : '';
-      const message = `Dear ${quotationData.customerName},\n\nPlease find attached your quotation for ${quotationData.eventType} at Cranbourne Public Hall.\n\nEvent Details:\n- Date: ${new Date(quotationData.eventDate).toLocaleDateString()}\n- Time: ${quotationData.startTime} - ${quotationData.endTime}\n- Resource: ${quotationData.resource}\n- Total Amount: $${quotationData.totalAmount.toFixed(2)} AUD${depositLine}\n\nThis quotation is valid until ${new Date(quotationData.validUntil).toLocaleDateString()}.\n\nTo accept this quotation, please reply to this email or contact us directly.\n\nThank you for considering Cranbourne Public Hall for your event!`;
+      const message = `Dear ${quotationData.customerName},\n\nPlease find attached your quotation for ${quotationData.eventType} at Cranbourne Public Hall.\n\nEvent Details:\n- Date: ${new Date(quotationData.eventDate).toLocaleDateString()}\n- Time: ${quotationData.startTime} - ${quotationData.endTime}\n- Resource: ${quotationData.resource}\n\nCharges (AUD):\n- Subtotal: $${subtotal.toFixed(2)}\n- GST (${ratePct}%): $${gst.toFixed(2)}\n- Total (incl. GST): $${totalInclGst.toFixed(2)}${depositLine}\n- Final Payment Due: $${finalAmount.toFixed(2)}\n\nThis quotation is valid until ${new Date(quotationData.validUntil).toLocaleDateString()}.\n\nTo accept this quotation, please reply to this email or contact us directly.\n\nThank you for considering Cranbourne Public Hall for your event!`;
 
       const mailOptions = {
         from: 'dpawan434741@gmail.com',
@@ -459,16 +477,51 @@ class EmailService {
                   <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Resource:</td>
                   <td style="padding: 8px 0; color: #1e293b;">${quotationData.resource}</td>
                 </tr>
+                ${(() => {
+                  const ratePct = Number.isFinite(Number(quotationData.taxRate)) ? Number(quotationData.taxRate) : 10;
+                  const rate = ratePct / 100;
+                  const isInclusive = quotationData.taxType === 'Exclusive' ? false : true;
+                  const rawTotal = Number(quotationData.totalAmount || 0);
+                  const subtotal = Number.isFinite(Number(quotationData.subtotal))
+                    ? Number(quotationData.subtotal)
+                    : (isInclusive ? Math.round((rawTotal / (1 + rate)) * 100) / 100 : Math.round(rawTotal * 100) / 100);
+                  const gst = Number.isFinite(Number(quotationData.gst))
+                    ? Number(quotationData.gst)
+                    : (isInclusive ? Math.round((rawTotal - subtotal) * 100) / 100 : Math.round((subtotal * rate) * 100) / 100);
+                  const totalInclGst = Number.isFinite(Number(quotationData.totalInclGst))
+                    ? Number(quotationData.totalInclGst)
+                    : (isInclusive ? Math.round(rawTotal * 100) / 100 : Math.round((subtotal + gst) * 100) / 100);
+                  const depositAmount = Number(quotationData.depositAmount || 0);
+                  const finalAmount = Number.isFinite(Number(quotationData.finalAmount))
+                    ? Number(quotationData.finalAmount)
+                    : Math.max(0, Math.round((totalInclGst - depositAmount) * 100) / 100);
+                  return `
                 <tr>
-                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Total Amount:</td>
-                  <td style="padding: 8px 0; color: #059669; font-weight: bold; font-size: 18px;">$${quotationData.totalAmount.toFixed(2)} AUD</td>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Subtotal:</td>
+                  <td style="padding: 8px 0; color: #1e293b;">$${subtotal.toFixed(2)} AUD</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">GST (${ratePct}%):</td>
+                  <td style="padding: 8px 0; color: #1e293b;">$${gst.toFixed(2)} AUD</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Total (incl. GST):</td>
+                  <td style="padding: 8px 0; color: #059669; font-weight: bold; font-size: 18px;">$${totalInclGst.toFixed(2)} AUD</td>
                 </tr>
                 ${quotationData.depositType && quotationData.depositType !== 'None' ? `
-                <tr>
-                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Deposit Amount:</td>
-                  <td style="padding: 8px 0; color: #1e293b; font-weight: bold;">$${quotationData.depositAmount.toFixed(2)} AUD</td>
+                <tr style="background-color: #dbeafe; border-top: 2px solid #3b82f6; border-bottom: 2px solid #3b82f6;">
+                  <td style="padding: 12px 8px; color: #1e40af; font-weight: 800;">💰 Deposit (pay first):</td>
+                  <td style="padding: 12px 8px; color: #1e40af; font-weight: 800; text-align: right;">-$${depositAmount.toFixed(2)} AUD</td>
                 </tr>
-                ` : ''}
+                <tr>
+                  <td colspan="2" style="padding: 6px 8px; color: #1e3a8a; font-size: 12px;">
+                    Paying the deposit confirms your booking. You'll receive a booking confirmation once paid.
+                  </td>
+                </tr>` : ''}
+                <tr>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Final Payment Due:</td>
+                  <td style="padding: 8px 0; color: #059669; font-weight: bold; font-size: 18px;">$${finalAmount.toFixed(2)} AUD</td>
+                </tr>`; })()}
                 <tr>
                   <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Valid Until:</td>
                   <td style="padding: 8px 0; color: #1e293b;">${new Date(quotationData.validUntil).toLocaleDateString()}</td>

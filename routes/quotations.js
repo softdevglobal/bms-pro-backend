@@ -239,33 +239,67 @@ async function generateQuotationPDF(quotationData) {
          .text(`${quotationData.resource} - ${quotationData.eventType}`, 200, 425, { width: 240 })
          .text(`$${quotationData.totalAmount.toFixed(2)}`, 450, 425, { width: 95, align: 'right' });
 
-      // Totals box showing Total, Deposit (if any), and Final
+      // Compute normalized amounts with graceful fallback for legacy data
+      const ratePct = Number.isFinite(Number(quotationData.taxRate)) ? Number(quotationData.taxRate) : 10;
+      const rate = ratePct / 100;
+      const isInclusive = quotationData.taxType === 'Exclusive' ? false : true;
+      const rawTotal = Number(quotationData.totalAmount || 0);
+      const subtotal = Number.isFinite(Number(quotationData.subtotal))
+        ? Number(quotationData.subtotal)
+        : (isInclusive ? Math.round((rawTotal / (1 + rate)) * 100) / 100 : Math.round(rawTotal * 100) / 100);
+      const gst = Number.isFinite(Number(quotationData.gst))
+        ? Number(quotationData.gst)
+        : (isInclusive ? Math.round((rawTotal - subtotal) * 100) / 100 : Math.round((subtotal * rate) * 100) / 100);
+      const totalInclGst = Number.isFinite(Number(quotationData.totalInclGst))
+        ? Number(quotationData.totalInclGst)
+        : (isInclusive ? Math.round(rawTotal * 100) / 100 : Math.round((subtotal + gst) * 100) / 100);
+      const depositAmount = Number(quotationData.depositAmount || 0);
+      const finalAmount = Number.isFinite(Number(quotationData.finalAmount))
+        ? Number(quotationData.finalAmount)
+        : Math.max(0, Math.round((totalInclGst - depositAmount) * 100) / 100);
+
+      // Totals box showing Subtotal, GST, Total (incl), Deposit (if any), and Final
       let currentY = 460;
-      const totalsBoxHeight = quotationData.depositType && quotationData.depositType !== 'None' ? 70 : 55;
+      const totalsBoxHeight = (quotationData.depositType && quotationData.depositType !== 'None') ? 105 : 90;
       doc.rect(350, currentY, 205, totalsBoxHeight)
          .fill('#ffffff')
          .stroke(secondaryColor, 1);
 
-      // Total line
+      // Subtotal line
       doc.fillColor(darkGray)
          .fontSize(11)
          .font('Helvetica-Bold')
-         .text('Total:', 360, currentY + 10)
+         .text('Subtotal:', 360, currentY + 10)
          .font('Helvetica')
-         .text(`$${quotationData.totalAmount.toFixed(2)} AUD`, 360, currentY + 10, { width: 185, align: 'right' });
+         .text(`$${subtotal.toFixed(2)} AUD`, 360, currentY + 10, { width: 185, align: 'right' });
+
+      // GST line
+      doc.fillColor(darkGray)
+         .font('Helvetica-Bold')
+         .text(`GST (${ratePct}%)`, 360, currentY + 25)
+         .font('Helvetica')
+         .text(`$${gst.toFixed(2)} AUD`, 360, currentY + 25, { width: 185, align: 'right' });
+
+      // Total incl. GST line
+      doc.fillColor(darkGray)
+         .font('Helvetica-Bold')
+         .text('Total (incl. GST):', 360, currentY + 40)
+         .font('Helvetica')
+         .text(`$${totalInclGst.toFixed(2)} AUD`, 360, currentY + 40, { width: 185, align: 'right' });
 
       // Deposit line if applicable
-      let finalAmount = quotationData.totalAmount;
       if (quotationData.depositType && quotationData.depositType !== 'None') {
-        doc.font('Helvetica-Bold')
-           .text('Deposit:', 360, currentY + 25)
-           .font('Helvetica')
-           .text(`-$${quotationData.depositAmount.toFixed(2)} AUD`, 360, currentY + 25, { width: 185, align: 'right' });
-        finalAmount = quotationData.totalAmount - quotationData.depositAmount;
+        // Highlight deposit as primary action (blue color, bold)
+        doc.fillColor('#1e40af')
+           .font('Helvetica-Bold')
+           .text('Deposit (pay first):', 360, currentY + 55)
+           .font('Helvetica-Bold')
+           .text(`-$${depositAmount.toFixed(2)} AUD`, 360, currentY + 55, { width: 185, align: 'right' })
+           .fillColor(darkGray);
       }
 
       // Final line
-      const finalY = quotationData.depositType && quotationData.depositType !== 'None' ? currentY + 40 : currentY + 25;
+      const finalY = quotationData.depositType && quotationData.depositType !== 'None' ? currentY + 70 : currentY + 55;
       doc.fillColor(accentColor)
          .font('Helvetica-Bold')
          .text('Final:', 360, finalY)
@@ -302,9 +336,9 @@ async function generateQuotationPDF(quotationData) {
       // Add deposit terms based on deposit type
       if (quotationData.depositType && quotationData.depositType !== 'None') {
         if (quotationData.depositType === 'Fixed') {
-          doc.text(`• Payment terms: $${quotationData.depositAmount.toFixed(2)} deposit required to confirm booking.`, 50, 645);
+          doc.text(`• Payment terms: $${depositAmount.toFixed(2)} deposit required to confirm booking.`, 50, 645);
         } else if (quotationData.depositType === 'Percentage') {
-          doc.text(`• Payment terms: ${quotationData.depositValue}% ($${quotationData.depositAmount.toFixed(2)}) deposit required to confirm booking.`, 50, 645);
+          doc.text(`• Payment terms: ${quotationData.depositValue}% ($${depositAmount.toFixed(2)}) deposit required to confirm booking.`, 50, 645);
         }
       } else {
         doc.text('• Payment terms: 50% deposit required to confirm booking.', 50, 645);
@@ -375,7 +409,10 @@ router.post('/', verifyToken, async (req, res) => {
       validUntil,
       notes,
       depositType,
-      depositValue
+      depositValue,
+      taxType,
+      taxRate,
+      status: requestedStatus
     } = req.body;
 
     // Validate required fields
@@ -433,17 +470,31 @@ router.post('/', verifyToken, async (req, res) => {
     // Generate quotation ID
     const quotationId = `QUO-${Date.now().toString().slice(-6)}`;
 
-    // Calculate deposit amount (GST-inclusive for consistency with booking confirmations)
+    // Normalize tax/totals based on taxType and taxRate
+    const ratePct = Number.isFinite(Number(taxRate)) ? Number(taxRate) : 10;
+    const rate = ratePct / 100;
+    const isInclusive = taxType === 'Inclusive';
+    const rawTotal = parseFloat(totalAmount);
+    const subtotal = isInclusive
+      ? Math.round((rawTotal / (1 + rate)) * 100) / 100
+      : Math.round(rawTotal * 100) / 100;
+    const gst = isInclusive
+      ? Math.round((rawTotal - subtotal) * 100) / 100
+      : Math.round((subtotal * rate) * 100) / 100;
+    const totalInclGst = isInclusive
+      ? Math.round(rawTotal * 100) / 100
+      : Math.round((subtotal + gst) * 100) / 100;
+
+    // Calculate deposit amount (ALWAYS GST-inclusive base for calculation)
     let depositAmount = 0;
     if (depositType === 'Fixed') {
-      // Fixed deposits are already GST-inclusive as entered by the user
-      depositAmount = parseFloat(depositValue);
+      // Fixed deposits are entered as GST-inclusive
+      depositAmount = Math.max(0, Math.round((parseFloat(depositValue) || 0) * 100) / 100);
     } else if (depositType === 'Percentage') {
-      // For percentage deposits, calculate on GST-inclusive amount
-      const gstRate = 0.1;
-      const totalAmountInclGst = parseFloat(totalAmount) * (1 + gstRate);
-      depositAmount = Math.round((totalAmountInclGst * parseFloat(depositValue) / 100) * 100) / 100;
+      const pct = Math.max(0, Math.min(100, parseFloat(depositValue) || 0));
+      depositAmount = Math.round(((totalInclGst * pct) / 100) * 100) / 100;
     }
+    const finalAmount = Math.max(0, Math.round((totalInclGst - depositAmount) * 100) / 100);
 
     // Create quotation data
     const quotationData = {
@@ -458,11 +509,17 @@ router.post('/', verifyToken, async (req, res) => {
       endTime: endTime,
       guestCount: guestCount ? parseInt(guestCount) : null,
       totalAmount: parseFloat(totalAmount),
+      taxType: taxType || 'Inclusive',
+      taxRate: ratePct,
+      subtotal: subtotal,
+      gst: gst,
+      totalInclGst: totalInclGst,
       depositType: depositType || 'None',
       depositValue: depositValue ? parseFloat(depositValue) : 0,
       depositAmount: depositAmount,
+      finalAmount: finalAmount,
       validUntil: validUntil || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(), // 14 days from now
-      status: 'Draft',
+      status: requestedStatus === 'Sent' ? 'Sent' : 'Draft',
       notes: notes || '',
       hallOwnerId: actualHallOwnerId,
       createdBy: userId,
@@ -497,6 +554,19 @@ router.post('/', verifyToken, async (req, res) => {
       req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'],
       actualHallOwnerId
     );
+
+    // If created with status Sent, send email with PDF attachment
+    if (quotationData.status === 'Sent') {
+      try {
+        const resourceDisplayName = await getResourceDisplayName(quotationData.resource);
+        const pdfBuffer = await generateQuotationPDF({ ...quotationData, resource: resourceDisplayName });
+        await emailService.sendQuotationEmail({ ...quotationData, resource: resourceDisplayName }, pdfBuffer);
+        console.log('Quotation email sent successfully (on create) to:', quotationData.customerEmail);
+      } catch (emailErr) {
+        console.error('Failed to send quotation email on create:', emailErr);
+        // Do not fail the create response if email fails
+      }
+    }
 
     res.status(201).json({
       message: 'Quotation created successfully',
@@ -961,14 +1031,74 @@ router.put('/:id', verifyToken, async (req, res) => {
       return res.status(403).json({ message: 'Access denied. Only hall owners and sub-users can update quotations.' });
     }
 
-    // Prepare update data
-    const finalUpdateData = {
-      ...updateData,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    };
+    // If monetary or tax fields are being updated, normalize and recalc amounts
+    let finalUpdateData = { ...updateData };
+    const shouldRecalc = (
+      Object.prototype.hasOwnProperty.call(updateData, 'totalAmount') ||
+      Object.prototype.hasOwnProperty.call(updateData, 'taxType') ||
+      Object.prototype.hasOwnProperty.call(updateData, 'taxRate') ||
+      Object.prototype.hasOwnProperty.call(updateData, 'depositType') ||
+      Object.prototype.hasOwnProperty.call(updateData, 'depositValue')
+    );
+
+    if (shouldRecalc) {
+      const taxType = finalUpdateData.taxType ?? quotationData.taxType ?? 'Inclusive';
+      const ratePct = Number.isFinite(Number(finalUpdateData.taxRate)) ? Number(finalUpdateData.taxRate) : (Number.isFinite(Number(quotationData.taxRate)) ? Number(quotationData.taxRate) : 10);
+      const rate = ratePct / 100;
+      const isInclusive = taxType === 'Exclusive' ? false : true;
+      const rawTotal = Number(finalUpdateData.totalAmount ?? quotationData.totalAmount ?? 0);
+      const subtotal = isInclusive
+        ? Math.round((rawTotal / (1 + rate)) * 100) / 100
+        : Math.round(rawTotal * 100) / 100;
+      const gst = isInclusive
+        ? Math.round((rawTotal - subtotal) * 100) / 100
+        : Math.round((subtotal * rate) * 100) / 100;
+      const totalInclGst = isInclusive ? Math.round(rawTotal * 100) / 100 : Math.round((subtotal + gst) * 100) / 100;
+
+      const depositType = finalUpdateData.depositType ?? quotationData.depositType ?? 'None';
+      const depositValue = Number(finalUpdateData.depositValue ?? quotationData.depositValue ?? 0);
+      let depositAmount = 0;
+      if (depositType === 'Fixed') {
+        depositAmount = Math.max(0, Math.round(depositValue * 100) / 100);
+      } else if (depositType === 'Percentage') {
+        const pct = Math.max(0, Math.min(100, depositValue));
+        depositAmount = Math.round(((totalInclGst * pct) / 100) * 100) / 100;
+      }
+      const finalAmount = Math.max(0, Math.round((totalInclGst - depositAmount) * 100) / 100);
+
+      finalUpdateData = {
+        ...finalUpdateData,
+        taxType,
+        taxRate: ratePct,
+        subtotal,
+        gst,
+        totalInclGst,
+        depositType,
+        depositValue,
+        depositAmount,
+        finalAmount
+      };
+    }
+
+    finalUpdateData.updatedAt = admin.firestore.FieldValue.serverTimestamp();
 
     // Update quotation
     await quotationDoc.ref.update(finalUpdateData);
+
+    // If status is updated to 'Sent', send quotation email with PDF
+    if (finalUpdateData.status === 'Sent' && quotationData.status !== 'Sent') {
+      try {
+        // Fetch latest quotation data for email/pdf
+        const updatedSnap = await quotationDoc.ref.get();
+        const latest = updatedSnap.data();
+        const resourceDisplayName = await getResourceDisplayName(latest.resource);
+        const pdfBuffer = await generateQuotationPDF({ ...latest, resource: resourceDisplayName });
+        await emailService.sendQuotationEmail({ ...latest, resource: resourceDisplayName }, pdfBuffer);
+        console.log('Quotation email sent successfully (on update) to:', latest.customerEmail);
+      } catch (emailErr) {
+        console.error('Failed to send quotation email on update:', emailErr);
+      }
+    }
 
     res.json({
       message: 'Quotation updated successfully',
