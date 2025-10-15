@@ -622,8 +622,35 @@ class EmailService {
       totalAmount, 
       bookingId, 
       quotationId, 
-      notes 
+      notes, 
+      taxType, 
+      taxRate, 
+      depositType, 
+      depositValue, 
+      depositAmount 
     } = bookingData;
+
+    // Compute normalized amounts using provided taxType/taxRate with safe defaults
+    const ratePct = Number.isFinite(Number(taxRate)) ? Number(taxRate) : 10;
+    const rate = ratePct / 100;
+    const isInclusive = taxType === 'Exclusive' ? false : true;
+    const rawTotal = Number(totalAmount || 0);
+    const subtotal = isInclusive
+      ? Math.round((rawTotal / (1 + rate)) * 100) / 100
+      : Math.round(rawTotal * 100) / 100;
+    const gst = isInclusive
+      ? Math.round((rawTotal - subtotal) * 100) / 100
+      : Math.round((subtotal * rate) * 100) / 100;
+    const totalInclGst = isInclusive ? Math.round(rawTotal * 100) / 100 : Math.round((subtotal + gst) * 100) / 100;
+    const depAmt = (() => {
+      if (depositType === 'Fixed') return Math.max(0, Math.round((Number(depositAmount ?? depositValue) || 0) * 100) / 100);
+      if (depositType === 'Percentage') {
+        const pct = Math.max(0, Math.min(100, Number(depositValue) || 0));
+        return Math.round(((totalInclGst * pct) / 100) * 100) / 100;
+      }
+      return Number(depositAmount || 0) || 0;
+    })();
+    const finalDue = Math.max(0, Math.round((totalInclGst - depAmt) * 100) / 100);
 
     return `
       <!DOCTYPE html>
@@ -698,9 +725,19 @@ class EmailService {
                 </div>
                 ` : ''}
                 
-                <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
-                  <span style="color: #64748b; font-weight: 500;">Total Amount:</span>
-                  <span style="color: #059669; font-weight: 700; font-size: 18px;">$${totalAmount.toFixed(2)} AUD</span>
+                <div style="display: grid; gap: 10px;">
+                  <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px dashed #e2e8f0;">
+                    <span style="color: #64748b; font-weight: 500;">Subtotal:</span>
+                    <span style="color: #1e293b; font-weight: 600;">$${subtotal.toFixed(2)} AUD</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px dashed #e2e8f0;">
+                    <span style="color: #64748b; font-weight: 500;">GST (${ratePct}%):</span>
+                    <span style="color: #1e293b; font-weight: 600;">$${gst.toFixed(2)} AUD</span>
+                  </div>
+                  <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
+                    <span style="color: #64748b; font-weight: 500;">Total (incl. GST):</span>
+                    <span style="color: #059669; font-weight: 700; font-size: 18px;">$${totalInclGst.toFixed(2)} AUD</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -735,15 +772,29 @@ class EmailService {
             ` : ''}
             
             <!-- Next Steps -->
-            <div style="background-color: #f0fdf4; border: 1px solid #22c55e; border-radius: 8px; padding: 20px; margin-bottom: 25px;">
+            <div style="background-color: #eff6ff; border: 1px solid #3b82f6; border-radius: 8px; padding: 20px; margin-bottom: 25px;">
               <h3 style="color: #15803d; margin: 0 0 15px 0; font-size: 16px;">
-                🚀 What's Next?
+                💰 Deposit and Next Steps
               </h3>
-              <ul style="color: #15803d; margin: 0; padding-left: 20px; line-height: 1.6;">
-                <li>Your booking is now confirmed and secured</li>
-                <li>You will receive a separate invoice for payment</li>
-                <li>We'll contact you closer to the event date with setup details</li>
-                <li>If you have any questions, please contact us using the booking reference</li>
+              <div style="background-color: #dbeafe; border: 2px solid #3b82f6; border-radius: 6px; padding: 12px; margin: 10px 0;">
+                <div style="display: flex; justify-content: space-between; font-weight: 800; color: #1e40af;">
+                  <span>Deposit (pay first):</span>
+                  <span>-$${depAmt.toFixed(2)} AUD</span>
+                </div>
+                <div style="margin-top: 6px; color: #1e3a8a; font-size: 12px;">
+                  Paying the deposit confirms your booking. You'll receive a confirmation receipt once paid.
+                </div>
+              </div>
+              <div style="background-color: #dcfce7; border: 2px solid #22c55e; border-radius: 6px; padding: 12px; margin: 10px 0;">
+                <div style="display: flex; justify-content: space-between; font-weight: 800; color: #166534;">
+                  <span>Final Payment Due:</span>
+                  <span>$${finalDue.toFixed(2)} AUD</span>
+                </div>
+              </div>
+              <ul style="color: #0c4a6e; margin: 0; padding-left: 20px; line-height: 1.6;">
+                <li>We'll send invoices with payment details.</li>
+                <li>Closer to the event, we'll contact you with setup details.</li>
+                <li>Questions? Reply to this email with your booking reference.</li>
               </ul>
             </div>
             
