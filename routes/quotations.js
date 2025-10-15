@@ -8,6 +8,39 @@ const https = require('https');
 
 const router = express.Router();
 
+// Generate a human-readable, unique booking code like: BK-YYYYMMDD-ABC12
+function formatDateForCode(bookingDate) {
+  try {
+    if (!bookingDate) return '';
+    if (typeof bookingDate === 'string') return bookingDate.replace(/-/g, '');
+    const d = new Date(bookingDate);
+    if (Number.isNaN(d.getTime())) return '';
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}${m}${day}`;
+  } catch (_) {
+    return '';
+  }
+}
+
+function generateCandidateBookingCode(bookingDate) {
+  const ymd = formatDateForCode(bookingDate);
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let suffix = '';
+  for (let i = 0; i < 5; i++) suffix += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+  return `BK-${ymd}-${suffix}`;
+}
+
+async function generateUniqueBookingCode(firestore, bookingDate, maxAttempts = 10) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const code = generateCandidateBookingCode(bookingDate);
+    const snap = await firestore.collection('bookings').where('bookingCode', '==', code).limit(1).get();
+    if (snap.empty) return code;
+  }
+  return null;
+}
+
 // Helper: download a remote image into a Buffer (HTTPS only)
 function downloadImageBuffer(url) {
   return new Promise((resolve, reject) => {
@@ -699,6 +732,8 @@ router.put('/:id/status', verifyToken, async (req, res) => {
     if (status === 'Accepted') {
       try {
         // Create booking from quotation
+        let bookingCode = await generateUniqueBookingCode(admin.firestore(), quotationData.eventDate);
+        const ymd = (quotationData.eventDate || '').toString().replace(/-/g, '');
         const bookingData = {
           customerId: null,
           customerName: quotationData.customerName,
@@ -715,6 +750,7 @@ router.put('/:id/status', verifyToken, async (req, res) => {
           guestCount: quotationData.guestCount,
           hallOwnerId: actualHallOwnerId,
           status: 'confirmed', // Accepted quotations become confirmed bookings
+          bookingCode: bookingCode || null,
           calculatedPrice: quotationData.totalAmount,
           priceDetails: {
             quotationId: quotationData.id,
@@ -731,6 +767,16 @@ router.put('/:id/status', verifyToken, async (req, res) => {
         };
 
         const bookingDocRef = await admin.firestore().collection('bookings').add(bookingData);
+        // Enforce bookingCode if generation failed or was null
+        if (!bookingCode) {
+          try {
+            const fallback = `BK-${ymd}-${bookingDocRef.id.slice(-6).toUpperCase()}`;
+            await bookingDocRef.update({ bookingCode: fallback });
+            bookingCode = fallback;
+          } catch (e) {
+            console.warn('Failed to set fallback bookingCode for quotation booking:', e?.message || e);
+          }
+        }
         
         // Update quotation with booking reference
         await quotationDoc.ref.update({
@@ -758,6 +804,7 @@ router.put('/:id/status', verifyToken, async (req, res) => {
             guestCount: quotationData.guestCount,
             totalAmount: quotationData.totalAmount,
             bookingId: bookingDocRef.id,
+            bookingCode: bookingCode,
             quotationId: quotationData.id,
             notes: quotationData.notes
           });

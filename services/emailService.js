@@ -118,6 +118,12 @@ class EmailService {
               <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Booking ID:</td>
               <td style="padding: 8px 0; color: #1e293b;">${data.bookingId}</td>
             </tr>
+            ${data.bookingCode ? `
+            <tr>
+              <td style=\"padding: 8px 0; color: #64748b; font-weight: bold;\">Booking Code:</td>
+              <td style=\"padding: 8px 0; color: #1e293b;\">${data.bookingCode}</td>
+            </tr>
+            ` : ''}
             ${data.eventType ? `
             <tr>
               <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Event Type:</td>

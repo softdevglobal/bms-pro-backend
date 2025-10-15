@@ -5,6 +5,46 @@ const { verifyToken } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
+// Generate a human-readable, unique booking code like: BK-YYYYMMDD-ABC12
+function formatDateForCode(bookingDate) {
+  try {
+    if (!bookingDate) return '';
+    // bookingDate is expected as 'YYYY-MM-DD'; fallback to Date if needed
+    if (typeof bookingDate === 'string') return bookingDate.replace(/-/g, '');
+    const d = new Date(bookingDate);
+    if (Number.isNaN(d.getTime())) return '';
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}${m}${day}`;
+  } catch (_) {
+    return '';
+  }
+}
+
+function generateCandidateBookingCode(bookingDate) {
+  const ymd = formatDateForCode(bookingDate);
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // exclude easily-confused chars
+  let suffix = '';
+  for (let i = 0; i < 5; i++) {
+    suffix += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+  }
+  return `BK-${ymd}-${suffix}`;
+}
+
+async function generateUniqueBookingCode(firestore, bookingDate, maxAttempts = 10) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const code = generateCandidateBookingCode(bookingDate);
+    const snap = await firestore
+      .collection('bookings')
+      .where('bookingCode', '==', code)
+      .limit(1)
+      .get();
+    if (snap.empty) return code;
+  }
+  throw new Error('Failed to generate a unique booking code. Please try again.');
+}
+
 // Helper function to create notification and send email
 async function createNotificationAndSendEmail(userId, userEmail, notificationData) {
   try {
@@ -303,6 +343,7 @@ router.post('/admin', verifyToken, async (req, res) => {
     }
 
     // Create booking data
+    const bookingCode = await generateUniqueBookingCode(admin.firestore(), bookingDate);
     const bookingData = {
       customerId: null, // Admin-created bookings don't have a customer Firebase UID
       customerName: customerName.trim(),
@@ -319,6 +360,7 @@ router.post('/admin', verifyToken, async (req, res) => {
       guestCount: guestCount ? parseInt(guestCount) : null,
       hallOwnerId: actualHallOwnerId,
       status: status,
+      bookingCode: bookingCode,
       calculatedPrice: calculatedPrice,
       priceDetails: priceDetails,
       bookingSource: 'admin', // Track that this was created by admin
@@ -338,9 +380,16 @@ router.post('/admin', verifyToken, async (req, res) => {
 
     // Save to Firestore
     const docRef = await admin.firestore().collection('bookings').add(bookingData);
+    // Ensure bookingCode is persisted even if initial write missed it
+    try {
+      await docRef.update({ bookingCode: bookingCode });
+    } catch (codeUpdateErr) {
+      console.warn('Non-blocking: failed to enforce bookingCode on admin booking:', codeUpdateErr?.message || codeUpdateErr);
+    }
 
     console.log('Admin booking created successfully:', {
       bookingId: docRef.id,
+      bookingCode: bookingCode,
       customerName: customerName,
       customerEmail: customerEmail,
       hallOwnerId: actualHallOwnerId,
@@ -390,9 +439,9 @@ router.post('/admin', verifyToken, async (req, res) => {
         const notificationData = {
           type: 'booking_confirmation',
           title: `Booking ${status.charAt(0).toUpperCase() + status.slice(1)} - ${eventType}`,
-          message: `Hello ${customerName},\n\nYour booking has been ${status}.\n\nEvent: ${eventType}\nDate: ${bookingDate}\nTime: ${startTime} - ${endTime}\nHall: ${hallData.name}${calculatedPrice ? `\nTotal Cost: $${calculatedPrice.toFixed(2)}` : ''}${additionalDescription ? `\n\nNotes: ${additionalDescription}` : ''}\n\nThank you for choosing our venue!`,
+          message: `Hello ${customerName},\n\nYour booking has been ${status}.Thank you for choosing our venue!`,
           data: {
-            bookingId: docRef.id,
+            bookingCode: bookingCode,
             customerName: customerName,
             eventType: eventType,
             hallName: hallData.name,
@@ -605,6 +654,7 @@ router.post('/', async (req, res) => {
     }
 
     // Create booking data
+    const bookingCode = await generateUniqueBookingCode(admin.firestore(), bookingDate);
     const bookingData = {
       customerId: customerId || null, // Firebase UID of the customer (optional for backward compatibility)
       customerName: customerName.trim(),
@@ -621,6 +671,7 @@ router.post('/', async (req, res) => {
       guestCount: guestCount ? parseInt(guestCount) : null, // Number of guests
       hallOwnerId: hallOwnerId,
       status: 'pending', // New bookings start as pending
+      bookingCode: bookingCode,
       calculatedPrice: calculatedPrice,
       priceDetails: priceDetails,
       bookingSource: bookingSource || 'website', // Track where booking came from
@@ -630,9 +681,16 @@ router.post('/', async (req, res) => {
 
     // Save to Firestore
     const docRef = await admin.firestore().collection('bookings').add(bookingData);
+    // Ensure bookingCode is persisted even if initial write missed it
+    try {
+      await docRef.update({ bookingCode: bookingCode });
+    } catch (codeUpdateErr) {
+      console.warn('Non-blocking: failed to enforce bookingCode on public booking:', codeUpdateErr?.message || codeUpdateErr);
+    }
 
     console.log('Booking created successfully:', {
       bookingId: docRef.id,
+      bookingCode: bookingCode,
       customerId: customerId,
       customerName: customerName,
       customerEmail: customerEmail,
@@ -683,9 +741,10 @@ router.post('/', async (req, res) => {
         const notificationData = {
           type: 'booking_submitted',
           title: 'Booking Request Submitted',
-          message: `Your booking request for ${eventType} on ${bookingDate} has been submitted successfully.${priceMessage} We'll get back to you soon with confirmation.`,
+          message: `Your booking request for ${eventType} on ${bookingDate} has been submitted successfully. Booking Code: ${bookingCode}.${priceMessage} We'll get back to you soon with confirmation.`,
           data: {
             bookingId: docRef.id,
+            bookingCode: bookingCode,
             eventType: eventType,
             bookingDate: bookingDate,
             startTime: startTime,
@@ -726,9 +785,10 @@ router.post('/', async (req, res) => {
           const fallbackEmailData = {
             to: customerEmail,
             subject: `Booking Request Submitted - ${eventType}`,
-            body: `Dear ${customerName},\n\nYour booking request for ${eventType} on ${bookingDate} has been submitted successfully.\n\nBooking Details:\n- Event: ${eventType}\n- Date: ${bookingDate}\n- Time: ${startTime} - ${endTime}\n- Resource: ${hallData.name}\n- Booking ID: ${docRef.id}\n\nWe'll get back to you soon with confirmation.\n\nThank you for choosing Cranbourne Public Hall!`,
+            body: `Dear ${customerName},\n\nYour booking request for ${eventType} on ${bookingDate} has been submitted successfully.\n\nBooking Details:\n- Event: ${eventType}\n- Date: ${bookingDate}\n- Time: ${startTime} - ${endTime}\n- Resource: ${hallData.name}\n- Booking ID: ${docRef.id}\n- Booking Code: ${bookingCode}\n\nWe'll get back to you soon with confirmation.\n\nThank you for choosing Cranbourne Public Hall!`,
             recipientName: customerName,
             bookingId: docRef.id,
+            bookingCode: bookingCode,
             templateName: 'booking_submitted_fallback',
             isCustom: true
           };
