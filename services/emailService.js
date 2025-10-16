@@ -195,7 +195,7 @@ class EmailService {
             ${data.calculatedPrice ? `
             <tr style="background-color: #dcfce7; border-top: 2px solid #22c55e;">
               <td style="padding: 15px 12px; color: #166534; font-weight: bold; font-size: 18px;">💰 Estimated Price:</td>
-              <td style="padding: 15px 12px; color: #166534; font-weight: bold; font-size: 18px; text-align: right;">$${totalWithGST.toFixed(2)} AUD</td>
+              <td style="padding: 15px 12px; color: #166534; font-weight: bold; font-size: 18px; text-align: right;">$${subtotal.toFixed(2)} AUD</td>
             </tr>
             ` : ''}
           </table>
