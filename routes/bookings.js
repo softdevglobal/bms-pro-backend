@@ -970,6 +970,7 @@ router.put('/:id/status', verifyToken, async (req, res) => {
     // Compute/validate deposit information if provided when confirming
     const updatePayload = {
       status: status,
+      bookingCode: bookingData.bookingCode, // PRESERVE existing booking code
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     };
 
@@ -1184,6 +1185,7 @@ router.put('/:id/price', verifyToken, async (req, res) => {
 
     // Prepare update data
     const updateData = {
+      bookingCode: bookingData.bookingCode, // PRESERVE existing booking code
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     };
 
@@ -1479,6 +1481,7 @@ router.put('/:id', verifyToken, async (req, res) => {
       }
     }
 
+    updateData.bookingCode = existing.bookingCode; // PRESERVE existing booking code
     updateData.updatedAt = admin.firestore.FieldValue.serverTimestamp();
     await bookingRef.update(updateData);
 
