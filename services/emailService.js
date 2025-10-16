@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const admin = require('../firebaseAdmin');
 
 //email service
 class EmailService {
@@ -17,6 +18,26 @@ class EmailService {
     console.log('📧 EmailService: Transporter created, verifying connection...');
     // Verify transporter configuration
     this.verifyConnection();
+  }
+
+  // Fetch hall owner's logo from Firebase Storage
+  async getHallOwnerLogo(hallOwnerId) {
+    try {
+      if (!hallOwnerId) {
+        return 'https://via.placeholder.com/200x80/4F46E5/FFFFFF?text=Cranbourne+Hall';
+      }
+
+      const userDoc = await admin.firestore().collection('users').doc(hallOwnerId).get();
+      if (!userDoc.exists) {
+        return 'https://via.placeholder.com/200x80/4F46E5/FFFFFF?text=Cranbourne+Hall';
+      }
+
+      const userData = userDoc.data();
+      return userData.profilePicture || 'https://via.placeholder.com/200x80/4F46E5/FFFFFF?text=Cranbourne+Hall';
+    } catch (error) {
+      console.error('Error fetching hall owner logo:', error);
+      return 'https://via.placeholder.com/200x80/4F46E5/FFFFFF?text=Cranbourne+Hall';
+    }
   }
 
   // Safely normalize Firestore Timestamp, Date, ISO string, or epoch to Date
@@ -63,7 +84,7 @@ class EmailService {
     }
   }
 
-  async sendNotificationEmail(notificationData, userEmail) {
+  async sendNotificationEmail(notificationData, userEmail, hallOwnerId = null) {
     try {
       console.log('📧 EmailService: Preparing to send notification email...');
       console.log('📧 EmailService: Recipient:', userEmail);
@@ -72,7 +93,7 @@ class EmailService {
       const { type, title, message, data } = notificationData;
       
       // Generate email content based on notification type
-      const emailContent = this.generateEmailContent(type, title, message, data);
+      const emailContent = await this.generateEmailContent(type, title, message, data, hallOwnerId);
       
       const mailOptions = {
         from: 'dpawan434741@gmail.com',
@@ -92,81 +113,99 @@ class EmailService {
     }
   }
 
-  generateEmailContent(type, title, message, data) {
+  async generateEmailContent(type, title, message, data, hallOwnerId = null) {
     const baseTemplate = {
       subject: `Cranbourne Public Hall - ${title}`,
       text: message,
-      html: this.generateHTMLTemplate(type, title, message, data)
+      html: await this.generateHTMLTemplate(type, title, message, data, hallOwnerId)
     };
 
     return baseTemplate;
   }
 
-  generateHTMLTemplate(type, title, message, data) {
-    const logoUrl = 'https://via.placeholder.com/200x80/4F46E5/FFFFFF?text=Cranbourne+Hall';
+  async generateHTMLTemplate(type, title, message, data, hallOwnerId = null) {
+    // Fetch company logo from database
+    const logoUrl = await this.getHallOwnerLogo(hallOwnerId);
     
     let actionButton = '';
     let bookingDetails = '';
     
-      // Add booking details if available
+    // Add booking details if available
     if (data && data.bookingId) {
+      // Calculate payment details
+      const subtotal = Number(data.calculatedPrice || 0);
+      const gstRate = 0.10; // 10% GST
+      const gstAmount = Math.round(subtotal * gstRate * 100) / 100;
+      const totalWithGST = Math.round((subtotal + gstAmount) * 100) / 100;
+      const depositAmount = Number(data.depositAmount || 0);
+      const balanceDue = Math.max(0, Math.round((totalWithGST - depositAmount) * 100) / 100);
+
       bookingDetails = `
-        <div style="background-color: #f8fafc; padding: 20px; border-radius: 8px; margin: 20px 0;">
-          <h3 style="color: #1e293b; margin: 0 0 15px 0;">Booking Details</h3>
+        <div style="background-color: #f0f9ff; border: 2px solid #0ea5e9; border-radius: 12px; padding: 25px; margin: 25px 0;">
+          <h3 style="color: #0c4a6e; margin: 0 0 20px 0; font-size: 20px; border-bottom: 2px solid #0ea5e9; padding-bottom: 10px;">
+            📋 Booking Details
+          </h3>
           <table style="width: 100%; border-collapse: collapse;">
-            <tr>
-              <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Booking ID:</td>
-              <td style="padding: 8px 0; color: #1e293b;">${data.bookingId}</td>
-            </tr>
             ${data.bookingCode ? `
+            <tr style="background-color: #fef3c7; border: 2px solid #f59e0b;">
+              <td style="padding: 15px 12px; color: #92400e; font-weight: bold; font-size: 18px;">🎫 Booking Reference:</td>
+              <td style="padding: 15px 12px; color: #92400e; font-weight: bold; font-size: 18px; font-family: monospace; text-align: right;">${data.bookingCode}</td>
+            </tr>
+            ` : ''}
+            ${data.customerName ? `
             <tr>
-              <td style=\"padding: 8px 0; color: #64748b; font-weight: bold;\">Booking Code:</td>
-              <td style=\"padding: 8px 0; color: #1e293b;\">${data.bookingCode}</td>
+              <td style="padding: 12px 8px; color: #64748b; font-weight: bold; border-bottom: 1px solid #e2e8f0;">Customer Name:</td>
+              <td style="padding: 12px 8px; color: #1e293b; border-bottom: 1px solid #e2e8f0; text-align: right;">${data.customerName}</td>
             </tr>
             ` : ''}
             ${data.eventType ? `
             <tr>
-              <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Event Type:</td>
-              <td style="padding: 8px 0; color: #1e293b;">${data.eventType}</td>
+              <td style="padding: 12px 8px; color: #64748b; font-weight: bold; border-bottom: 1px solid #e2e8f0;">Event Type:</td>
+              <td style="padding: 12px 8px; color: #1e293b; border-bottom: 1px solid #e2e8f0; text-align: right;">${data.eventType}</td>
+            </tr>
+            ` : ''}
+            ${data.hallName ? `
+            <tr>
+              <td style="padding: 12px 8px; color: #64748b; font-weight: bold; border-bottom: 1px solid #e2e8f0;">Venue:</td>
+              <td style="padding: 12px 8px; color: #1e293b; border-bottom: 1px solid #e2e8f0; text-align: right;">${data.hallName}</td>
             </tr>
             ` : ''}
             ${data.bookingDate ? `
             <tr>
-              <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Date:</td>
-              <td style="padding: 8px 0; color: #1e293b;">${data.bookingDate}</td>
+              <td style="padding: 12px 8px; color: #64748b; font-weight: bold; border-bottom: 1px solid #e2e8f0;">Date:</td>
+              <td style="padding: 12px 8px; color: #1e293b; border-bottom: 1px solid #e2e8f0; text-align: right;">${data.bookingDate}</td>
             </tr>
             ` : ''}
             ${data.startTime ? `
             <tr>
-              <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Time:</td>
-              <td style="padding: 8px 0; color: #1e293b;">${data.startTime}${data.endTime ? ` - ${data.endTime}` : ''}</td>
+              <td style="padding: 12px 8px; color: #64748b; font-weight: bold; border-bottom: 1px solid #e2e8f0;">Time:</td>
+              <td style="padding: 12px 8px; color: #1e293b; border-bottom: 1px solid #e2e8f0; text-align: right;">${data.startTime}${data.endTime ? ` - ${data.endTime}` : ''}</td>
+            </tr>
+            ` : ''}
+            ${data.status ? `
+            <tr>
+              <td style="padding: 12px 8px; color: #64748b; font-weight: bold; border-bottom: 1px solid #e2e8f0;">Status:</td>
+              <td style="padding: 12px 8px; color: #1e293b; border-bottom: 1px solid #e2e8f0; text-align: right;">
+                <span style="background-color: ${data.status === 'confirmed' ? '#dcfce7' : '#fef3c7'}; color: ${data.status === 'confirmed' ? '#166534' : '#92400e'}; padding: 4px 12px; border-radius: 12px; font-weight: bold; text-transform: uppercase; font-size: 12px;">
+                  ${data.status}
+                </span>
+              </td>
             </tr>
             ` : ''}
             ${data.calculatedPrice ? `
-            <tr>
-              <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Subtotal:</td>
-              <td style="padding: 8px 0; color: #1e293b;">$${data.calculatedPrice.toFixed(2)}</td>
-            </tr>
-            <tr>
-              <td style="padding: 8px 0; color: #64748b; font-weight: bold;">GST (10%):</td>
-              <td style="padding: 8px 0; color: #1e293b;">$${(data.calculatedPrice * 0.1).toFixed(2)}</td>
-            </tr>
-            <tr>
-              <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Total Amount (incl. GST):</td>
-              <td style="padding: 8px 0; color: #059669; font-weight: bold; font-size: 18px;">$${(data.calculatedPrice * 1.1).toFixed(2)} AUD</td>
-            </tr>
-            ` : ''}
-            ${Number(data.depositAmount) > 0 ? `
-            <tr style="background-color: #dbeafe;">
-              <td style="padding: 12px 8px; color: #1e40af; font-weight: bold; font-size: 16px;">💰 Deposit (GST incl.):</td>
-              <td style="padding: 12px 8px; color: #1e40af; font-weight: bold; font-size: 16px;">$${Number(data.depositAmount).toFixed(2)} AUD</td>
-            </tr>
-            <tr style="background-color: #dcfce7; border: 2px solid #22c55e;">
-              <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 18px;">💳 Balance Due:</td>
-              <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 18px;">$${(data.calculatedPrice * 1.1 - Number(data.depositAmount)).toFixed(2)} AUD</td>
+            <tr style="background-color: #dcfce7; border-top: 2px solid #22c55e;">
+              <td style="padding: 15px 12px; color: #166534; font-weight: bold; font-size: 18px;">💰 Estimated Price:</td>
+              <td style="padding: 15px 12px; color: #166534; font-weight: bold; font-size: 18px; text-align: right;">$${totalWithGST.toFixed(2)} AUD</td>
             </tr>
             ` : ''}
           </table>
+          ${data.calculatedPrice ? `
+          <div style="margin-top: 15px; padding: 12px; background-color: #fef3c7; border-radius: 8px; border-left: 4px solid #f59e0b;">
+            <p style="margin: 0; color: #92400e; font-size: 14px; line-height: 1.6;">
+              ℹ️ This is an estimated price. Final invoice will be sent once the booking is confirmed.
+            </p>
+          </div>
+          ` : ''}
         </div>
       `;
     }
@@ -277,16 +316,17 @@ class EmailService {
       console.log('📧 EmailService: Recipient:', emailData.to);
       console.log('📧 EmailService: Subject:', emailData.subject);
       
-      const { to, subject, body, recipientName, bookingId, templateName, isCustom } = emailData;
+      const { to, subject, body, recipientName, bookingId, templateName, isCustom, hallOwnerId } = emailData;
       
       // Generate email content with enhanced template
-      const emailContent = this.generateCustomizedEmailContent({
+      const emailContent = await this.generateCustomizedEmailContent({
         subject,
         body,
         recipientName,
         bookingId,
         templateName,
-        isCustom
+        isCustom,
+        hallOwnerId
       });
       
       const mailOptions = {
@@ -308,8 +348,8 @@ class EmailService {
     }
   }
 
-  generateCustomizedEmailContent({ subject, body, recipientName, bookingId, templateName, isCustom }) {
-    const logoUrl = 'https://via.placeholder.com/200x80/4F46E5/FFFFFF?text=Cranbourne+Hall';
+  async generateCustomizedEmailContent({ subject, body, recipientName, bookingId, templateName, isCustom, hallOwnerId }) {
+    const logoUrl = await this.getHallOwnerLogo(hallOwnerId);
     
     // Create a more flexible template for customized emails
     const htmlContent = `
@@ -407,7 +447,7 @@ class EmailService {
         from: 'dpawan434741@gmail.com',
         to: quotationData.customerEmail,
         subject: subject,
-        html: this.generateQuotationHTMLTemplate(quotationData),
+        html: await this.generateQuotationHTMLTemplate(quotationData),
         text: message,
         attachments: [
           {
@@ -427,8 +467,8 @@ class EmailService {
     }
   }
 
-  generateQuotationHTMLTemplate(quotationData) {
-    const logoUrl = 'https://via.placeholder.com/200x80/4F46E5/FFFFFF?text=Cranbourne+Hall';
+  async generateQuotationHTMLTemplate(quotationData) {
+    const logoUrl = await this.getHallOwnerLogo(quotationData.hallOwnerId);
     
     return `
       <!DOCTYPE html>
@@ -576,7 +616,8 @@ class EmailService {
         totalAmount, 
         bookingId, 
         quotationId, 
-        notes 
+        notes,
+        hallOwnerId 
       } = bookingData;
 
       // Prefer human-readable venue name if available
@@ -586,7 +627,7 @@ class EmailService {
         from: 'dpawan434741@gmail.com',
         to: customerEmail,
         subject: `Booking Confirmed - ${eventType} at ${venueName}`,
-        html: this.generateBookingConfirmationHTML({
+        html: await this.generateBookingConfirmationHTML({
           customerName,
           eventType,
           resource: venueName,
@@ -597,7 +638,8 @@ class EmailService {
           totalAmount,
           bookingId,
           quotationId,
-          notes
+          notes,
+          hallOwnerId
         })
       };
 
@@ -610,7 +652,7 @@ class EmailService {
     }
   }
 
-  generateBookingConfirmationHTML(bookingData) {
+  async generateBookingConfirmationHTML(bookingData) {
     const { 
       customerName, 
       eventType, 
@@ -627,8 +669,12 @@ class EmailService {
       taxRate, 
       depositType, 
       depositValue, 
-      depositAmount 
+      depositAmount,
+      hallOwnerId 
     } = bookingData;
+
+    // Fetch company logo
+    const logoUrl = await this.getHallOwnerLogo(hallOwnerId);
 
     // Compute normalized amounts using provided taxType/taxRate with safe defaults
     const ratePct = Number.isFinite(Number(taxRate)) ? Number(taxRate) : 10;
@@ -831,19 +877,21 @@ class EmailService {
         eventType, 
         resource, 
         eventDate, 
-        quotationId 
+        quotationId,
+        hallOwnerId 
       } = quotationData;
 
       const mailOptions = {
         from: 'dpawan434741@gmail.com',
         to: customerEmail,
         subject: `Quotation Update - ${eventType} at ${resource}`,
-        html: this.generateQuotationDeclineHTML({
+        html: await this.generateQuotationDeclineHTML({
           customerName,
           eventType,
           resource,
           eventDate,
-          quotationId
+          quotationId,
+          hallOwnerId
         })
       };
 
@@ -856,14 +904,17 @@ class EmailService {
     }
   }
 
-  generateQuotationDeclineHTML(quotationData) {
+  async generateQuotationDeclineHTML(quotationData) {
     const { 
       customerName, 
       eventType, 
       resource, 
       eventDate, 
-      quotationId 
+      quotationId,
+      hallOwnerId 
     } = quotationData;
+
+    const logoUrl = await this.getHallOwnerLogo(hallOwnerId);
 
     return `
       <!DOCTYPE html>
@@ -1003,7 +1054,7 @@ class EmailService {
         from: 'dpawan434741@gmail.com',
         to: invoiceData.customer.email,
         subject: subject,
-        html: this.generateInvoiceHTMLTemplate(invoiceData),
+        html: await this.generateInvoiceHTMLTemplate(invoiceData),
         text: message,
         attachments: [
           {
@@ -1023,8 +1074,8 @@ class EmailService {
     }
   }
 
-  generateInvoiceHTMLTemplate(invoiceData) {
-    const logoUrl = 'https://via.placeholder.com/200x80/4F46E5/FFFFFF?text=Cranbourne+Hall';
+  async generateInvoiceHTMLTemplate(invoiceData) {
+    const logoUrl = await this.getHallOwnerLogo(invoiceData.hallOwnerId);
     
     return `
       <!DOCTYPE html>
@@ -1215,7 +1266,7 @@ class EmailService {
         from: 'dpawan434741@gmail.com',
         to: invoiceData.customer.email,
         subject: subject,
-        html: this.generateInvoiceReminderHTMLTemplate(invoiceData),
+        html: await this.generateInvoiceReminderHTMLTemplate(invoiceData),
         text: message
       };
 
@@ -1231,7 +1282,7 @@ class EmailService {
   async sendPaymentThankYouEmail(invoiceData) {
     try {
       const subject = `Payment received - Invoice ${invoiceData.invoiceNumber}`;
-      const html = this.generatePaymentThankYouHTML(invoiceData);
+      const html = await this.generatePaymentThankYouHTML(invoiceData);
       const text = `Dear ${invoiceData.customer?.name || 'Customer'},\n\nThank you for your payment. We have marked your invoice ${invoiceData.invoiceNumber} as PAID.\n\nAmount: $${(invoiceData.finalTotal || invoiceData.total || 0).toFixed ? (invoiceData.finalTotal || invoiceData.total).toFixed(2) : invoiceData.finalTotal || invoiceData.total} AUD\nInvoice Type: ${invoiceData.invoiceType}\nIssue Date: ${new Date(invoiceData.issueDate).toLocaleDateString()}\n\nWe appreciate your business!`;
 
       const mailOptions = {
@@ -1251,8 +1302,8 @@ class EmailService {
     }
   }
 
-  generatePaymentThankYouHTML(invoiceData) {
-    const logoUrl = 'https://via.placeholder.com/200x80/4F46E5/FFFFFF?text=Cranbourne+Hall';
+  async generatePaymentThankYouHTML(invoiceData) {
+    const logoUrl = await this.getHallOwnerLogo(invoiceData.hallOwnerId);
     const amount = (invoiceData.finalTotal || invoiceData.total) || 0;
     return `
       <!DOCTYPE html>
@@ -1303,8 +1354,8 @@ class EmailService {
     `;
   }
 
-  generateInvoiceReminderHTMLTemplate(invoiceData) {
-    const logoUrl = 'https://via.placeholder.com/200x80/4F46E5/FFFFFF?text=Cranbourne+Hall';
+  async generateInvoiceReminderHTMLTemplate(invoiceData) {
+    const logoUrl = await this.getHallOwnerLogo(invoiceData.hallOwnerId);
     const isOverdue = invoiceData.status === 'OVERDUE';
     const daysOverdue = isOverdue ? Math.ceil((new Date() - new Date(invoiceData.dueDate)) / (1000 * 60 * 60 * 24)) : 0;
     

@@ -46,7 +46,7 @@ async function generateUniqueBookingCode(firestore, bookingDate, maxAttempts = 1
 }
 
 // Helper function to create notification and send email
-async function createNotificationAndSendEmail(userId, userEmail, notificationData) {
+async function createNotificationAndSendEmail(userId, userEmail, notificationData, hallOwnerId = null) {
   try {
     // Check if a similar notification already exists to prevent duplicates
     // Using a simpler query that doesn't require composite indexes
@@ -108,7 +108,7 @@ async function createNotificationAndSendEmail(userId, userEmail, notificationDat
     // Send email notification if user email is provided
     if (userEmail) {
       try {
-        await emailService.sendNotificationEmail(notificationData, userEmail);
+        await emailService.sendNotificationEmail(notificationData, userEmail, hallOwnerId);
         console.log('Email sent successfully to:', userEmail);
       } catch (emailError) {
         console.error('Failed to send email to:', userEmail, emailError.message);
@@ -439,8 +439,9 @@ router.post('/admin', verifyToken, async (req, res) => {
         const notificationData = {
           type: 'booking_confirmation',
           title: `Booking ${status.charAt(0).toUpperCase() + status.slice(1)} - ${eventType}`,
-          message: `Hello ${customerName},\n\nYour booking has been ${status}.Thank you for choosing our venue!`,
+          message: `Hello ${customerName},\n\nYour booking has been ${status}. Thank you for choosing our venue!`,
           data: {
+            bookingId: docRef.id,
             bookingCode: bookingCode,
             customerName: customerName,
             eventType: eventType,
@@ -450,12 +451,13 @@ router.post('/admin', verifyToken, async (req, res) => {
             endTime: endTime,
             status: status,
             calculatedPrice: calculatedPrice,
+            depositAmount: 0, // Will be set when status changes to confirmed
             createdBy: 'admin',
             additionalDescription: additionalDescription || ''
           }
         };
 
-        await emailService.sendNotificationEmail(notificationData, customerEmail);
+        await emailService.sendNotificationEmail(notificationData, customerEmail, actualHallOwnerId);
         console.log('Booking confirmation email sent successfully to:', customerEmail);
       } catch (emailError) {
         console.error('Failed to send booking confirmation email:', emailError);
@@ -745,17 +747,20 @@ router.post('/', async (req, res) => {
           data: {
             bookingId: docRef.id,
             bookingCode: bookingCode,
+            customerName: customerName,
             eventType: eventType,
             bookingDate: bookingDate,
             startTime: startTime,
             endTime: endTime,
             calculatedPrice: calculatedPrice,
-            hallName: hallData.name
+            depositAmount: 0,
+            hallName: hallData.name,
+            status: 'pending'
           }
         };
 
-        // Send email notification directly using emailService
-        await emailService.sendNotificationEmail(notificationData, customerEmail);
+        // Send email notification directly using emailService with hallOwnerId
+        await emailService.sendNotificationEmail(notificationData, customerEmail, hallOwnerId);
         console.log('✅ Email notification sent successfully for booking:', {
           customerEmail,
           bookingId: docRef.id,
@@ -766,7 +771,7 @@ router.post('/', async (req, res) => {
         // Also create notification in database if customerId exists (for authenticated users)
         if (customerId) {
           try {
-            const notificationId = await createNotificationAndSendEmail(customerId, customerEmail, notificationData);
+            const notificationId = await createNotificationAndSendEmail(customerId, customerEmail, notificationData, hallOwnerId);
             console.log('Database notification created for authenticated user:', {
               customerId,
               notificationId,
@@ -1099,11 +1104,11 @@ router.put('/:id/status', verifyToken, async (req, res) => {
         };
 
         if (bookingData.customerId) {
-          await createNotificationAndSendEmail(bookingData.customerId, bookingData.customerEmail, notificationData);
+          await createNotificationAndSendEmail(bookingData.customerId, bookingData.customerEmail, notificationData, actualHallOwnerId);
           console.log('Notification and email sent for customer status update:', bookingData.customerId);
         } else {
           // Guest booking: send email directly (no DB notification userId)
-          await emailService.sendNotificationEmail(notificationData, bookingData.customerEmail);
+          await emailService.sendNotificationEmail(notificationData, bookingData.customerEmail, actualHallOwnerId);
           console.log('Email sent for guest customer (no customerId) on status update');
         }
       } catch (notificationError) {
@@ -1216,17 +1221,21 @@ router.put('/:id/price', verifyToken, async (req, res) => {
           message: `The price for your ${bookingData.eventType} booking on ${bookingData.bookingDate} has been updated to $${calculatedPrice.toFixed(2)}. Please review the updated pricing details.`,
           data: {
             bookingId: id,
+            bookingCode: bookingData.bookingCode,
+            customerName: bookingData.customerName,
             eventType: bookingData.eventType,
             bookingDate: bookingData.bookingDate,
             startTime: bookingData.startTime,
             endTime: bookingData.endTime,
             calculatedPrice: calculatedPrice,
+            depositAmount: bookingData.depositAmount || 0,
             previousPrice: bookingData.calculatedPrice,
-            hallName: bookingData.hallName
+            hallName: bookingData.hallName,
+            status: bookingData.status
           }
         };
 
-        await createNotificationAndSendEmail(bookingData.customerId, bookingData.customerEmail, notificationData);
+        await createNotificationAndSendEmail(bookingData.customerId, bookingData.customerEmail, notificationData, actualHallOwnerId);
         console.log('Price update notification and email sent for customer:', bookingData.customerId);
       } catch (notificationError) {
         console.error('Error creating price update notification:', notificationError);
