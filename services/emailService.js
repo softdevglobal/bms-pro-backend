@@ -259,10 +259,9 @@ class EmailService {
       </head>
       <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f1f5f9;">
         <div style="max-width: 600px; margin: 0 auto; background-color: white; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
-          <!-- Header -->
+          <!-- Header (no logo for booking/submission style notifications) -->
           <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); padding: 40px 20px; text-align: center;">
-            <img src="${logoUrl}" alt="Cranbourne Public Hall" draggable="false" style="max-width: 120px; height: auto; -webkit-user-drag: none; user-select: none; pointer-events: none;">
-            <h1 style="color: white; margin: 20px 0 0 0; font-size: 24px; font-weight: 600;">Cranbourne Public Hall</h1>
+            <h1 style="color: white; margin: 0; font-size: 24px; font-weight: 600;">Cranbourne Public Hall</h1>
           </div>
           
           <!-- Content -->
