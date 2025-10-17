@@ -508,6 +508,53 @@ router.post('/', verifyToken, async (req, res) => {
     }
     const finalAmount = Math.max(0, Math.round((totalInclGst - depositAmount) * 100) / 100);
 
+    // Build unified payment_details block (prefer client-provided if valid)
+    let paymentDetailsInput = req.body.payment_details || req.body.paymentDetails;
+    let paymentDetails = null;
+    if (paymentDetailsInput && typeof paymentDetailsInput === 'object') {
+      try {
+        const totalAmountNum = Number(paymentDetailsInput.total_amount);
+        const finalDueNum = Number(paymentDetailsInput.final_due);
+        const depositAmountNum = Number(paymentDetailsInput.deposit_amount);
+        const taxObj = paymentDetailsInput.tax || {};
+        const taxTypeStr = String(taxObj.tax_type ?? taxType ?? 'Inclusive');
+        const taxAmountNum = Number(taxObj.tax_amount);
+        const gstNum = Number(taxObj.gst);
+        paymentDetails = {
+          total_amount: Number.isFinite(totalAmountNum) ? totalAmountNum : totalInclGst,
+          final_due: Number.isFinite(finalDueNum) ? finalDueNum : finalAmount,
+          deposit_amount: Number.isFinite(depositAmountNum) ? depositAmountNum : depositAmount,
+          tax: {
+            tax_type: taxTypeStr,
+            tax_amount: Number.isFinite(taxAmountNum) ? taxAmountNum : gst,
+            gst: Number.isFinite(gstNum) ? gstNum : gst
+          },
+          deposit_paid: Boolean(paymentDetailsInput.deposit_paid) || false,
+          paid_at: paymentDetailsInput.paid_at || null,
+          savedAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+      } catch (_) {
+        paymentDetails = null;
+      }
+    }
+
+    if (!paymentDetails) {
+      // Server-computed fallback to ensure consistency
+      paymentDetails = {
+        total_amount: totalInclGst,
+        final_due: finalAmount,
+        deposit_amount: depositAmount,
+        tax: {
+          tax_type: isInclusive ? 'Inclusive' : 'Exclusive',
+          tax_amount: gst,
+          gst: gst
+        },
+        deposit_paid: false,
+        paid_at: null,
+        savedAt: admin.firestore.FieldValue.serverTimestamp()
+      };
+    }
+
     // Create quotation data
     const quotationData = {
       id: quotationId,
@@ -530,6 +577,7 @@ router.post('/', verifyToken, async (req, res) => {
       depositValue: depositValue ? parseFloat(depositValue) : 0,
       depositAmount: depositAmount,
       finalAmount: finalAmount,
+      payment_details: paymentDetails,
       validUntil: validUntil || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(), // 14 days from now
       status: requestedStatus === 'Sent' ? 'Sent' : 'Draft',
       notes: notes || '',
@@ -1090,6 +1138,54 @@ router.put('/:id', verifyToken, async (req, res) => {
         depositAmount,
         finalAmount
       };
+
+      // Sync a unified payment_details block (prefer provided shape if valid, else compute)
+      let paymentDetailsInput = updateData.payment_details || updateData.paymentDetails;
+      let paymentDetails = null;
+      if (paymentDetailsInput && typeof paymentDetailsInput === 'object') {
+        try {
+          const totalAmountNum = Number(paymentDetailsInput.total_amount);
+          const finalDueNum = Number(paymentDetailsInput.final_due);
+          const depositAmountNum = Number(paymentDetailsInput.deposit_amount);
+          const taxObj = paymentDetailsInput.tax || {};
+          const taxTypeStr = String(taxObj.tax_type ?? taxType);
+          const taxAmountNum = Number(taxObj.tax_amount);
+          const gstNum = Number(taxObj.gst);
+          paymentDetails = {
+            total_amount: Number.isFinite(totalAmountNum) ? totalAmountNum : totalInclGst,
+            final_due: Number.isFinite(finalDueNum) ? finalDueNum : finalAmount,
+            deposit_amount: Number.isFinite(depositAmountNum) ? depositAmountNum : depositAmount,
+            tax: {
+              tax_type: taxTypeStr,
+              tax_amount: Number.isFinite(taxAmountNum) ? taxAmountNum : gst,
+              gst: Number.isFinite(gstNum) ? gstNum : gst
+            },
+            deposit_paid: Boolean(paymentDetailsInput.deposit_paid) || false,
+            paid_at: paymentDetailsInput.paid_at || null,
+            savedAt: admin.firestore.FieldValue.serverTimestamp()
+          };
+        } catch (_) {
+          paymentDetails = null;
+        }
+      }
+
+      if (!paymentDetails) {
+        paymentDetails = {
+          total_amount: totalInclGst,
+          final_due: finalAmount,
+          deposit_amount: depositAmount,
+          tax: {
+            tax_type: taxType,
+            tax_amount: gst,
+            gst: gst
+          },
+          deposit_paid: false,
+          paid_at: null,
+          savedAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+      }
+
+      finalUpdateData.payment_details = paymentDetails;
     }
 
     finalUpdateData.updatedAt = admin.firestore.FieldValue.serverTimestamp();
