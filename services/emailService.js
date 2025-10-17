@@ -182,16 +182,7 @@ class EmailService {
               <td style="padding: 12px 8px; color: #1e293b; border-bottom: 1px solid #e2e8f0; text-align: right;">${data.startTime}${data.endTime ? ` - ${data.endTime}` : ''}</td>
             </tr>
             ` : ''}
-            ${data.status ? `
-            <tr>
-              <td style="padding: 12px 8px; color: #64748b; font-weight: bold; border-bottom: 1px solid #e2e8f0;">Status:</td>
-              <td style="padding: 12px 8px; color: #1e293b; border-bottom: 1px solid #e2e8f0; text-align: right;">
-                <span style="background-color: ${data.status === 'confirmed' ? '#dcfce7' : '#fef3c7'}; color: ${data.status === 'confirmed' ? '#166534' : '#92400e'}; padding: 4px 12px; border-radius: 12px; font-weight: bold; text-transform: uppercase; font-size: 12px;">
-                  ${data.status}
-                </span>
-              </td>
-            </tr>
-            ` : ''}
+            
             ${data.calculatedPrice ? `
             <tr style="background-color: #dcfce7; border-top: 2px solid #22c55e;">
               <td style="padding: 15px 12px; color: #166534; font-weight: bold; font-size: 18px;">💰 Estimated Price:</td>
@@ -270,7 +261,7 @@ class EmailService {
         <div style="max-width: 600px; margin: 0 auto; background-color: white; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
           <!-- Header -->
           <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); padding: 40px 20px; text-align: center;">
-            <img src="${logoUrl}" alt="Cranbourne Public Hall" style="max-width: 200px; height: auto;">
+            <img src="${logoUrl}" alt="Cranbourne Public Hall" draggable="false" style="max-width: 120px; height: auto; -webkit-user-drag: none; user-select: none; pointer-events: none;">
             <h1 style="color: white; margin: 20px 0 0 0; font-size: 24px; font-weight: 600;">Cranbourne Public Hall</h1>
           </div>
           
@@ -364,7 +355,7 @@ class EmailService {
         <div style="max-width: 600px; margin: 0 auto; background-color: white; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
           <!-- Header -->
           <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); padding: 40px 20px; text-align: center;">
-            <img src="${logoUrl}" alt="Cranbourne Public Hall" style="max-width: 200px; height: auto;">
+            <img src="${logoUrl}" alt="Cranbourne Public Hall" draggable="false" style="max-width: 120px; height: auto; -webkit-user-drag: none; user-select: none; pointer-events: none;">
             <h1 style="color: white; margin: 20px 0 0 0; font-size: 24px; font-weight: 600;">Cranbourne Public Hall</h1>
           </div>
           
@@ -482,7 +473,7 @@ class EmailService {
         <div style="max-width: 600px; margin: 0 auto; background-color: white; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
           <!-- Header -->
           <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); padding: 40px 20px; text-align: center;">
-            <img src="${logoUrl}" alt="Cranbourne Public Hall" style="max-width: 200px; height: auto;">
+            <img src="${logoUrl}" alt="Cranbourne Public Hall" draggable="false" style="max-width: 120px; height: auto; -webkit-user-drag: none; user-select: none; pointer-events: none;">
             <h1 style="color: white; margin: 20px 0 0 0; font-size: 24px; font-weight: 600;">Cranbourne Public Hall</h1>
           </div>
           
@@ -1089,7 +1080,6 @@ class EmailService {
         <div style="max-width: 600px; margin: 0 auto; background-color: white; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
           <!-- Header -->
           <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); padding: 40px 20px; text-align: center;">
-            <img src="${logoUrl}" alt="Cranbourne Public Hall" style="max-width: 200px; height: auto;">
             <h1 style="color: white; margin: 20px 0 0 0; font-size: 24px; font-weight: 600;">Cranbourne Public Hall</h1>
           </div>
           
@@ -1316,7 +1306,6 @@ class EmailService {
       <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f1f5f9;">
         <div style="max-width: 600px; margin: 0 auto; background-color: white; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
           <div style="background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); padding: 40px 20px; text-align: center;">
-            <img src="${logoUrl}" alt="Cranbourne Public Hall" style="max-width: 200px; height: auto;">
             <h1 style="color: white; margin: 20px 0 0 0; font-size: 24px; font-weight: 600;">Payment Received</h1>
           </div>
           <div style="padding: 40px 30px;">
@@ -1371,7 +1360,6 @@ class EmailService {
         <div style="max-width: 600px; margin: 0 auto; background-color: white; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
           <!-- Header -->
           <div style="background: linear-gradient(135deg, ${isOverdue ? '#dc2626' : '#f59e0b'} 0%, ${isOverdue ? '#b91c1c' : '#d97706'} 100%); padding: 40px 20px; text-align: center;">
-            <img src="${logoUrl}" alt="Cranbourne Public Hall" style="max-width: 200px; height: auto;">
             <h1 style="color: white; margin: 20px 0 0 0; font-size: 24px; font-weight: 600;">Cranbourne Public Hall</h1>
           </div>
           
