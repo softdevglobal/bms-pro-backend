@@ -975,7 +975,67 @@ router.put('/:id/status', verifyToken, async (req, res) => {
     };
 
     if (status === 'confirmed') {
-      // Normalize deposit type casing
+      // Determine if this is a Pending -> Confirmed transition
+      const isPendingToConfirmed = (bookingData?.status === 'pending');
+
+      // Normalize and validate new unified payment details when required
+      // Only required when accepting a pending booking (Pending -> Confirmed)
+      let paymentDetailsInput = req.body.payment_details || req.body.paymentDetails;
+      if (isPendingToConfirmed) {
+        if (!paymentDetailsInput || typeof paymentDetailsInput !== 'object') {
+          return res.status(400).json({
+            message: "payment_details is required when confirming a pending booking",
+          });
+        }
+
+        const { total_amount, final_due, deposit_amount, tax } = paymentDetailsInput;
+
+        if (total_amount === undefined || final_due === undefined || deposit_amount === undefined || tax === undefined) {
+          return res.status(400).json({
+            message: "payment_details must include total_amount, final_due, deposit_amount and tax"
+          });
+        }
+
+        const totalAmountNum = Number(total_amount);
+        const finalDueNum = Number(final_due);
+        const depositAmountNum = Number(deposit_amount);
+        if (Number.isNaN(totalAmountNum) || Number.isNaN(finalDueNum) || Number.isNaN(depositAmountNum)) {
+          return res.status(400).json({
+            message: "payment_details.total_amount, payment_details.final_due and payment_details.deposit_amount must be numbers"
+          });
+        }
+
+        if (typeof tax !== 'object' || tax === null || tax.tax_type === undefined || tax.tax_amount === undefined || tax.gst === undefined) {
+          return res.status(400).json({
+            message: "payment_details.tax must include tax_type, tax_amount and gst"
+          });
+        }
+
+        const taxAmountNum = Number(tax.tax_amount);
+        const gstNum = Number(tax.gst);
+        if (Number.isNaN(taxAmountNum) || Number.isNaN(gstNum)) {
+          return res.status(400).json({
+            message: "payment_details.tax.tax_amount and payment_details.tax.gst must be numbers"
+          });
+        }
+
+        // Save unified payment details block
+        updatePayload.payment_details = {
+          total_amount: totalAmountNum,
+          final_due: finalDueNum,
+          deposit_amount: depositAmountNum,
+          tax: {
+            tax_type: String(tax.tax_type),
+            tax_amount: taxAmountNum,
+            gst: gstNum
+          },
+          savedAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+
+        // Do not write legacy deposit fields when payment_details is provided.
+        // Only the unified payment_details block should be saved for this transition.
+      }
+      // Normalize deposit type casing (legacy path only)
       if (typeof depositType === 'string') {
         const t = String(depositType);
         if (['Fixed', 'Percentage', 'None'].includes(t)) {
@@ -985,7 +1045,7 @@ router.put('/:id/status', verifyToken, async (req, res) => {
         }
       }
 
-      // If deposit provided, ensure GST-inclusive amount is stored
+      // If deposit provided via legacy fields (when payment_details not used), ensure GST-inclusive amount is stored
       if (depositType && depositType !== 'None') {
         // Fetch GST rate from hall owner's settings (fallback to 10%)
         let gstRatePct = 10;
