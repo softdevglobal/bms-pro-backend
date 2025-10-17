@@ -470,8 +470,20 @@ router.post('/', verifyToken, async (req, res) => {
     // Generate quotation ID
     const quotationId = `QUO-${Date.now().toString().slice(-6)}`;
 
-    // Normalize tax/totals based on taxType and taxRate
-    const ratePct = Number.isFinite(Number(taxRate)) ? Number(taxRate) : 10;
+    // Resolve taxRate from DB settings if not provided; default 10
+    let ratePct = Number.isFinite(Number(taxRate)) ? Number(taxRate) : undefined;
+    if (!Number.isFinite(ratePct)) {
+      try {
+        const hallDoc = await admin.firestore().collection('users').doc(actualHallOwnerId).get();
+        const hallSettings = hallDoc?.data?.() ? hallDoc.data().settings : null;
+        if (hallSettings && Number.isFinite(Number(hallSettings.taxRate))) {
+          ratePct = Number(hallSettings.taxRate);
+        }
+      } catch (e) {
+        // ignore; will fallback to 10
+      }
+    }
+    ratePct = Number.isFinite(Number(ratePct)) ? Number(ratePct) : 10;
     const rate = ratePct / 100;
     const isInclusive = taxType === 'Inclusive';
     const rawTotal = parseFloat(totalAmount);

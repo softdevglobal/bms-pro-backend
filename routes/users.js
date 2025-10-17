@@ -157,6 +157,17 @@ router.post('/', async (req, res) => {
       userData.name = name.trim();
     }
 
+    // Initialize default settings including GST defaults
+    userData.settings = {
+      timezone: 'Australia/Sydney',
+      dateFormat: 'DD/MM/YYYY',
+      timeFormat: '12h',
+      currency: 'AUD',
+      // Tax/GST defaults
+      taxType: 'Inclusive',
+      taxRate: 10
+    };
+
     // Save user data to Firestore
     await admin.firestore().collection('users').doc(userRecord.uid).set(userData);
 
@@ -205,11 +216,11 @@ router.post('/', async (req, res) => {
   }
 });
 
-// PUT /api/users/settings - Update user settings (timezone, date format, currency)
+// PUT /api/users/settings - Update user settings (timezone, date format, currency, GST)
 router.put('/settings', verifyToken, async (req, res) => {
   try {
     const userId = req.user.uid;
-    const { timezone, dateFormat, timeFormat, currency } = req.body;
+    const { timezone, dateFormat, timeFormat, currency, taxType, taxRate } = req.body;
     const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
 
     // Validate timezone
@@ -243,6 +254,20 @@ router.put('/settings', verifyToken, async (req, res) => {
       return res.status(400).json({ message: 'Invalid currency' });
     }
 
+    // Validate tax type (GST mode)
+    const validTaxTypes = ['Inclusive', 'Exclusive'];
+    if (taxType !== undefined && !validTaxTypes.includes(taxType)) {
+      return res.status(400).json({ message: 'Invalid tax type. Must be Inclusive or Exclusive' });
+    }
+
+    // Validate tax rate (percentage 0-100)
+    if (taxRate !== undefined) {
+      const rateNumber = Number(taxRate);
+      if (!Number.isFinite(rateNumber) || rateNumber < 0 || rateNumber > 100) {
+        return res.status(400).json({ message: 'Invalid tax rate. Must be a number between 0 and 100' });
+      }
+    }
+
     // Check if user exists
     const userDoc = await admin.firestore().collection('users').doc(userId).get();
     if (!userDoc.exists) {
@@ -268,6 +293,12 @@ router.put('/settings', verifyToken, async (req, res) => {
     if (currency !== undefined) {
       newSettings.currency = currency;
     }
+    if (taxType !== undefined) {
+      newSettings.taxType = taxType;
+    }
+    if (taxRate !== undefined) {
+      newSettings.taxRate = Number(taxRate);
+    }
 
     // Prepare settings update
     const settingsUpdate = {
@@ -292,7 +323,9 @@ router.put('/settings', verifyToken, async (req, res) => {
         timezone: timezone || null,
         dateFormat: dateFormat || null,
         timeFormat: timeFormat || null,
-        currency: currency || null
+        currency: currency || null,
+        taxType: taxType || null,
+        taxRate: taxRate !== undefined ? Number(taxRate) : null
       },
       ipAddress,
       hallId
@@ -329,7 +362,9 @@ router.get('/settings', verifyToken, async (req, res) => {
       timezone: 'Australia/Sydney',
       dateFormat: 'DD/MM/YYYY',
       timeFormat: '12h',
-      currency: 'AUD'
+      currency: 'AUD',
+      taxType: 'Inclusive',
+      taxRate: 10
     };
 
     res.json({

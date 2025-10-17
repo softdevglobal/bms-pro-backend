@@ -987,7 +987,18 @@ router.put('/:id/status', verifyToken, async (req, res) => {
 
       // If deposit provided, ensure GST-inclusive amount is stored
       if (depositType && depositType !== 'None') {
-        const gstRate = 0.1;
+        // Fetch GST rate from hall owner's settings (fallback to 10%)
+        let gstRatePct = 10;
+        try {
+          const hallDoc = await admin.firestore().collection('users').doc(actualHallOwnerId).get();
+          const hallSettings = hallDoc?.data?.() ? hallDoc.data().settings : null;
+          if (hallSettings && Number.isFinite(Number(hallSettings.taxRate))) {
+            gstRatePct = Number(hallSettings.taxRate);
+          }
+        } catch (e) {
+          // ignore and use default
+        }
+        const gstRate = gstRatePct / 100;
         const bookingBase = Number(bookingData.calculatedPrice || 0);
         const baseInclGst = Math.round((bookingBase * (1 + gstRate)) * 100) / 100;
 
