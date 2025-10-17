@@ -1029,6 +1029,8 @@ router.put('/:id/status', verifyToken, async (req, res) => {
             tax_amount: taxAmountNum,
             gst: gstNum
           },
+          deposit_paid: false,
+          paid_at: null,
           savedAt: admin.firestore.FieldValue.serverTimestamp()
         };
 
@@ -1458,6 +1460,10 @@ router.put('/:id', verifyToken, async (req, res) => {
         return res.status(400).json({ message: 'Invalid status value' });
       }
       updateData.status = status;
+    }
+    // Allow updating payment_details (for marking deposit paid etc.)
+    if (req.body.payment_details !== undefined && typeof req.body.payment_details === 'object') {
+      updateData.payment_details = req.body.payment_details;
     }
 
     let hallNameToSet = null;
