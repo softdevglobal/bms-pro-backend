@@ -342,6 +342,91 @@ router.put('/settings', verifyToken, async (req, res) => {
   }
 });
 
+// GET /api/users/stripe-account - Get hall owner's Stripe Account ID (handles sub-users)
+router.get('/stripe-account', verifyToken, async (req, res) => {
+  try {
+    const requesterId = req.user.uid;
+
+    // Load requester to determine hall owner target
+    const requesterDoc = await admin.firestore().collection('users').doc(requesterId).get();
+    if (!requesterDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const requesterData = requesterDoc.data();
+
+    const targetUid = requesterData.role === 'sub_user' && requesterData.parentUserId
+      ? requesterData.parentUserId
+      : requesterId;
+
+    const targetDoc = await admin.firestore().collection('users').doc(targetUid).get();
+    if (!targetDoc.exists) {
+      return res.status(404).json({ message: 'Hall owner not found' });
+    }
+
+    const data = targetDoc.data();
+    res.json({ stripeAccountId: data?.stripeAccountId || '' });
+  } catch (error) {
+    console.error('Error fetching stripe account id:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// PUT /api/users/stripe-account - Set hall owner's Stripe Account ID (handles sub-users)
+router.put('/stripe-account', verifyToken, async (req, res) => {
+  try {
+    const { stripeAccountId } = req.body;
+    const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
+
+    const value = (stripeAccountId || '').trim();
+    if (value && !value.startsWith('acct_')) {
+      return res.status(400).json({ message: 'Stripe Account ID must start with "acct_"' });
+    }
+
+    // Determine hall owner target
+    const requesterId = req.user.uid;
+    const requesterDoc = await admin.firestore().collection('users').doc(requesterId).get();
+    if (!requesterDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const requesterData = requesterDoc.data();
+
+    const targetUid = requesterData.role === 'sub_user' && requesterData.parentUserId
+      ? requesterData.parentUserId
+      : requesterId;
+
+    // Update only stripeAccountId field on hall owner's user doc
+    await admin.firestore().collection('users').doc(targetUid).set({
+      stripeAccountId: value,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    // Audit log
+    try {
+      const AuditService = require('../services/auditService');
+      const hallId = targetUid; // hall owner's uid is hallId
+      await AuditService.logEvent({
+        userId: req.user.uid,
+        userEmail: req.user.email,
+        userRole: req.user.role,
+        action: 'stripe_account_updated',
+        targetType: 'user',
+        target: `User: ${targetUid}`,
+        changes: { new: { stripeAccountId: value ? 'acct_****' : '' } },
+        ipAddress,
+        hallId,
+        additionalInfo: 'Updated Stripe Account ID for hall owner'
+      });
+    } catch (auditErr) {
+      console.warn('Audit log failed for stripe update:', auditErr.message);
+    }
+
+    res.json({ stripeAccountId: value });
+  } catch (error) {
+    console.error('Error updating stripe account id:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // GET /api/users/settings - Get user settings
 router.get('/settings', verifyToken, async (req, res) => {
   try {
