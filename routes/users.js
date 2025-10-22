@@ -529,6 +529,105 @@ router.put('/bank-details', verifyToken, async (req, res) => {
   }
 });
 
+// GET /api/users/payment-methods - Get payment method toggles (handles sub-users)
+router.get('/payment-methods', verifyToken, async (req, res) => {
+  try {
+    const requesterId = req.user.uid;
+    const requesterDoc = await admin.firestore().collection('users').doc(requesterId).get();
+    if (!requesterDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const requesterData = requesterDoc.data();
+    const targetUid = requesterData.role === 'sub_user' && requesterData.parentUserId
+      ? requesterData.parentUserId
+      : requesterId;
+
+    const targetDoc = await admin.firestore().collection('users').doc(targetUid).get();
+    if (!targetDoc.exists) {
+      return res.status(404).json({ message: 'Hall owner not found' });
+    }
+    const data = targetDoc.data();
+    const defaults = { bankTransfer: true, cash: true, cheque: false };
+    const saved = data?.paymentMethods || {};
+    res.json({ paymentMethods: { ...defaults, ...saved } });
+  } catch (error) {
+    console.error('Error fetching payment methods:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// PUT /api/users/payment-methods - Update payment method toggles (handles sub-users)
+router.put('/payment-methods', verifyToken, async (req, res) => {
+  try {
+    const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
+    // Accept either top-level fields or nested paymentMethods
+    const payload = req.body || {};
+    const incoming = payload.paymentMethods || payload;
+    const updates = {};
+    if (incoming.bankTransfer !== undefined) {
+      if (typeof incoming.bankTransfer !== 'boolean') return res.status(400).json({ message: 'bankTransfer must be boolean' });
+      updates.bankTransfer = incoming.bankTransfer;
+    }
+    if (incoming.cash !== undefined) {
+      if (typeof incoming.cash !== 'boolean') return res.status(400).json({ message: 'cash must be boolean' });
+      updates.cash = incoming.cash;
+    }
+    if (incoming.cheque !== undefined) {
+      if (typeof incoming.cheque !== 'boolean') return res.status(400).json({ message: 'cheque must be boolean' });
+      updates.cheque = incoming.cheque;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ message: 'No valid payment method fields provided' });
+    }
+
+    const requesterId = req.user.uid;
+    const requesterDoc = await admin.firestore().collection('users').doc(requesterId).get();
+    if (!requesterDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const requesterData = requesterDoc.data();
+
+    const targetUid = requesterData.role === 'sub_user' && requesterData.parentUserId
+      ? requesterData.parentUserId
+      : requesterId;
+
+    const targetRef = admin.firestore().collection('users').doc(targetUid);
+    const currentDoc = await targetRef.get();
+    const current = currentDoc.exists && currentDoc.data().paymentMethods ? currentDoc.data().paymentMethods : {};
+    const newPaymentMethods = { ...current, ...updates };
+
+    await targetRef.set({
+      paymentMethods: newPaymentMethods,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    try {
+      const AuditService = require('../services/auditService');
+      const hallId = targetUid;
+      await AuditService.logEvent({
+        userId: req.user.uid,
+        userEmail: req.user.email,
+        userRole: req.user.role,
+        action: 'payment_methods_updated',
+        targetType: 'user',
+        target: `User: ${targetUid}`,
+        changes: { new: { paymentMethods: newPaymentMethods } },
+        ipAddress,
+        hallId,
+        additionalInfo: 'Updated payment method toggles'
+      });
+    } catch (auditErr) {
+      console.warn('Audit log failed for payment methods update:', auditErr.message);
+    }
+
+    res.json({ paymentMethods: newPaymentMethods });
+  } catch (error) {
+    console.error('Error updating payment methods:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // GET /api/users/settings - Get user settings
 router.get('/settings', verifyToken, async (req, res) => {
   try {
