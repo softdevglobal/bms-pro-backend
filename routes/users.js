@@ -427,6 +427,108 @@ router.put('/stripe-account', verifyToken, async (req, res) => {
   }
 });
 
+// GET /api/users/bank-details - Get hall owner's bank transfer details (handles sub-users)
+router.get('/bank-details', verifyToken, async (req, res) => {
+  try {
+    const requesterId = req.user.uid;
+
+    // Determine hall owner target
+    const requesterDoc = await admin.firestore().collection('users').doc(requesterId).get();
+    if (!requesterDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const requesterData = requesterDoc.data();
+
+    const targetUid = requesterData.role === 'sub_user' && requesterData.parentUserId
+      ? requesterData.parentUserId
+      : requesterId;
+
+    const targetDoc = await admin.firestore().collection('users').doc(targetUid).get();
+    if (!targetDoc.exists) {
+      return res.status(404).json({ message: 'Hall owner not found' });
+    }
+
+    const data = targetDoc.data();
+    const bankDetails = data?.bankDetails || null;
+    res.json({ bankDetails });
+  } catch (error) {
+    console.error('Error fetching bank details:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// PUT /api/users/bank-details - Set hall owner's bank transfer details (handles sub-users)
+router.put('/bank-details', verifyToken, async (req, res) => {
+  try {
+    const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
+    const {
+      accountName = '',
+      bsb = '',
+      accountNumber = '',
+      bankName = '',
+      referenceNote = ''
+    } = req.body || {};
+
+    // Basic validation
+    if (bsb && !/^\d{3}-?\d{3}$/.test(bsb)) {
+      return res.status(400).json({ message: 'Invalid BSB format. Use 6 digits (e.g. 123-456 or 123456)' });
+    }
+    if (accountNumber && !/^\d{4,12}$/.test(accountNumber)) {
+      return res.status(400).json({ message: 'Invalid account number. Use 4-12 digits' });
+    }
+
+    // Determine hall owner target
+    const requesterId = req.user.uid;
+    const requesterDoc = await admin.firestore().collection('users').doc(requesterId).get();
+    if (!requesterDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const requesterData = requesterDoc.data();
+
+    const targetUid = requesterData.role === 'sub_user' && requesterData.parentUserId
+      ? requesterData.parentUserId
+      : requesterId;
+
+    const bankDetails = {
+      accountName: String(accountName || '').trim(),
+      bsb: String(bsb || '').replace(/[^0-9]/g, '').replace(/(\d{3})(\d{3})/, '$1-$2'),
+      accountNumber: String(accountNumber || '').trim(),
+      bankName: String(bankName || '').trim(),
+      referenceNote: String(referenceNote || '').trim()
+    };
+
+    await admin.firestore().collection('users').doc(targetUid).set({
+      bankDetails,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    // Audit log
+    try {
+      const AuditService = require('../services/auditService');
+      const hallId = targetUid;
+      await AuditService.logEvent({
+        userId: req.user.uid,
+        userEmail: req.user.email,
+        userRole: req.user.role,
+        action: 'bank_details_updated',
+        targetType: 'user',
+        target: `User: ${targetUid}`,
+        changes: { new: { bankDetails: { ...bankDetails, accountNumber: bankDetails.accountNumber ? '****' : '' } } },
+        ipAddress,
+        hallId,
+        additionalInfo: 'Updated bank transfer details for hall owner'
+      });
+    } catch (auditErr) {
+      console.warn('Audit log failed for bank details update:', auditErr.message);
+    }
+
+    res.json({ bankDetails });
+  } catch (error) {
+    console.error('Error updating bank details:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // GET /api/users/settings - Get user settings
 router.get('/settings', verifyToken, async (req, res) => {
   try {
