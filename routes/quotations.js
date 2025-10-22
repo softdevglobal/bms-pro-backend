@@ -936,7 +936,8 @@ router.put('/:id/status', verifyToken, async (req, res) => {
             bookingId: bookingDocRef.id,
             bookingCode: bookingCode,
             quotationId: quotationData.id,
-            notes: quotationData.notes
+            notes: quotationData.notes,
+            hallOwnerId: actualHallOwnerId
           });
           
           console.log('✅ Booking confirmation email sent successfully to:', quotationData.customerEmail);

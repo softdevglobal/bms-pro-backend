@@ -40,6 +40,40 @@ class EmailService {
     }
   }
 
+  // Fetch hall owner's accepted payment methods with sensible defaults
+  async getHallOwnerPaymentMethods(hallOwnerId) {
+    try {
+      if (!hallOwnerId) {
+        return { bankTransfer: true, cash: true, cheque: false };
+      }
+      const userDoc = await admin.firestore().collection('users').doc(hallOwnerId).get();
+      if (!userDoc.exists) {
+        return { bankTransfer: true, cash: true, cheque: false };
+      }
+      const data = userDoc.data() || {};
+      const saved = data.paymentMethods || {};
+      const defaults = { bankTransfer: true, cash: true, cheque: false };
+      return { ...defaults, ...saved };
+    } catch (error) {
+      console.warn('Error fetching hall owner payment methods:', error?.message || error);
+      return { bankTransfer: true, cash: true, cheque: false };
+    }
+  }
+
+  // Fetch hall owner's bank transfer details if configured
+  async getHallOwnerBankDetails(hallOwnerId) {
+    try {
+      if (!hallOwnerId) return null;
+      const userDoc = await admin.firestore().collection('users').doc(hallOwnerId).get();
+      if (!userDoc.exists) return null;
+      const data = userDoc.data() || {};
+      return data.bankDetails || null;
+    } catch (error) {
+      console.warn('Error fetching hall owner bank details:', error?.message || error);
+      return null;
+    }
+  }
+
   // Safely normalize Firestore Timestamp, Date, ISO string, or epoch to Date
   normalizeDate(dateLike) {
     try {
@@ -130,6 +164,7 @@ class EmailService {
     let actionButton = '';
     let bookingDetails = '';
     let paymentBreakdown = '';
+    let paymentInformation = '';
     
     // Add booking details if available
     if (data && data.bookingId) {
@@ -260,6 +295,43 @@ class EmailService {
             </div>
           `;
         }
+        // Add payment methods and bank details (if configured for the hall owner)
+        try {
+          const [methods, bank] = await Promise.all([
+            this.getHallOwnerPaymentMethods(hallOwnerId),
+            this.getHallOwnerBankDetails(hallOwnerId)
+          ]);
+
+          const methodsChips = [
+            methods?.bankTransfer ? '<span style="display:inline-block;background:#eef2ff;color:#3730a3;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Bank Transfer</span>' : '',
+            methods?.cash ? '<span style="display:inline-block;background:#ecfccb;color:#365314;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Cash</span>' : '',
+            methods?.cheque ? '<span style="display:inline-block;background:#fffbeb;color:#92400e;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Cheque</span>' : ''
+          ].join('');
+
+          const bankHtml = (methods?.bankTransfer && bank)
+            ? `
+              <div style="background-color:#fff7ed;border:1px solid #fdba74;border-radius:8px;padding:16px;margin-top:12px;">
+                <div style="color:#9a3412;font-weight:800;margin-bottom:8px;">Bank Transfer Details</div>
+                <table style="width:100%;border-collapse:collapse;">
+                  ${bank.accountName ? `<tr><td style="padding:6px 0;color:#92400e;font-weight:600;">Account Name:</td><td style="padding:6px 0;color:#7c2d12;text-align:right;">${bank.accountName}</td></tr>` : ''}
+                  ${bank.bankName ? `<tr><td style="padding:6px 0;color:#92400e;font-weight:600;">Bank:</td><td style="padding:6px 0;color:#7c2d12;text-align:right;">${bank.bankName}</td></tr>` : ''}
+                  ${bank.bsb ? `<tr><td style="padding:6px 0;color:#92400e;font-weight:600;">BSB:</td><td style="padding:6px 0;color:#7c2d12;text-align:right;">${bank.bsb}</td></tr>` : ''}
+                  ${bank.accountNumber ? `<tr><td style="padding:6px 0;color:#92400e;font-weight:600;">Account Number:</td><td style="padding:6px 0;color:#7c2d12;text-align:right;">${bank.accountNumber}</td></tr>` : ''}
+                </table>
+                ${(data?.bookingCode || bank.referenceNote) ? `<div style="margin-top:8px;color:#9a3412;font-size:12px;">Reference: <strong>${bank.referenceNote || 'Please use your booking reference'}</strong>${data?.bookingCode ? ` (<span style="font-family:monospace;">${data.bookingCode}</span>)` : ''}</div>` : ''}
+              </div>
+            ` : '';
+
+          paymentInformation = `
+            <div style="background-color:#f8fafc;border-radius:8px;padding:20px;margin:10px 0 25px 0;border:1px solid #e2e8f0;">
+              <h3 style="color:#1e293b;margin:0 0 12px 0;font-size:18px;">Accepted Payment Methods</h3>
+              <div>${methodsChips || '<span style="color:#64748b;font-size:14px;">Payment methods will be sent with your invoice.</span>'}</div>
+              ${bankHtml}
+            </div>
+          `;
+        } catch (_) {
+          // ignore payment info errors
+        }
         if (data?.stripePaymentUrl) {
           actionButton = `
             <div style="text-align: center; margin: 30px 0;">
@@ -332,6 +404,7 @@ class EmailService {
             
             ${bookingDetails}
             ${paymentBreakdown}
+            ${paymentInformation}
             ${actionButton}
             
             <div style="border-top: 1px solid #e2e8f0; margin-top: 40px; padding-top: 30px; text-align: center;">
@@ -725,6 +798,18 @@ class EmailService {
     // Fetch company logo
     const logoUrl = await this.getHallOwnerLogo(hallOwnerId);
 
+    // Fetch accepted payment methods and bank details for this hall owner
+    let paymentMethods = { bankTransfer: true, cash: true, cheque: false };
+    let bankDetails = null;
+    try {
+      [paymentMethods, bankDetails] = await Promise.all([
+        this.getHallOwnerPaymentMethods(hallOwnerId),
+        this.getHallOwnerBankDetails(hallOwnerId)
+      ]);
+    } catch (_) {
+      // best-effort only
+    }
+
     // Compute normalized amounts using provided taxType/taxRate with safe defaults
     const ratePct = Number.isFinite(Number(taxRate)) ? Number(taxRate) : 10;
     const rate = ratePct / 100;
@@ -746,6 +831,26 @@ class EmailService {
       return Number(depositAmount || 0) || 0;
     })();
     const finalDue = Math.max(0, Math.round((totalInclGst - depAmt) * 100) / 100);
+
+    const methodsChips = [
+      paymentMethods?.bankTransfer ? '<span style="display:inline-block;background:#eef2ff;color:#3730a3;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Bank Transfer</span>' : '',
+      paymentMethods?.cash ? '<span style="display:inline-block;background:#ecfccb;color:#365314;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Cash</span>' : '',
+      paymentMethods?.cheque ? '<span style="display:inline-block;background:#fffbeb;color:#92400e;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Cheque</span>' : ''
+    ].join('');
+
+    const bankHtml = (paymentMethods?.bankTransfer && bankDetails)
+      ? `
+        <div style="background-color:#fff7ed;border:1px solid #fdba74;border-radius:8px;padding:16px;margin-top:12px;">
+          <div style="color:#9a3412;font-weight:800;margin-bottom:8px;">Bank Transfer Details</div>
+          <table style="width:100%;border-collapse:collapse;">
+            ${bankDetails.accountName ? `<tr><td style=\"padding:6px 0;color:#92400e;font-weight:600;\">Account Name:</td><td style=\"padding:6px 0;color:#7c2d12;text-align:right;\">${bankDetails.accountName}</td></tr>` : ''}
+            ${bankDetails.bankName ? `<tr><td style=\"padding:6px 0;color:#92400e;font-weight:600;\">Bank:</td><td style=\"padding:6px 0;color:#7c2d12;text-align:right;\">${bankDetails.bankName}</td></tr>` : ''}
+            ${bankDetails.bsb ? `<tr><td style=\"padding:6px 0;color:#92400e;font-weight:600;\">BSB:</td><td style=\"padding:6px 0;color:#7c2d12;text-align:right;\">${bankDetails.bsb}</td></tr>` : ''}
+            ${bankDetails.accountNumber ? `<tr><td style=\"padding:6px 0;color:#92400e;font-weight:600;\">Account Number:</td><td style=\"padding:6px 0;color:#7c2d12;text-align:right;\">${bankDetails.accountNumber}</td></tr>` : ''}
+          </table>
+          ${(bookingId || bankDetails.referenceNote) ? `<div style=\"margin-top:8px;color:#9a3412;font-size:12px;\">Reference: <strong>${bankDetails.referenceNote || 'Please use your booking reference'}</strong>${bookingId ? ` (<span style=\"font-family:monospace;\">${bookingId}</span>)` : ''}</div>` : ''}
+        </div>
+      ` : '';
 
     return `
       <!DOCTYPE html>
@@ -861,11 +966,18 @@ class EmailService {
                 📝 Additional Notes
               </h3>
               <p style="color: #0c4a6e; margin: 0; line-height: 1.6;">
-                ${notes}
+            ${notes}
               </p>
             </div>
             ` : ''}
             
+          <!-- Payment Methods -->
+          <div style="background-color: #f8fafc; border-radius: 8px; padding: 20px; margin-bottom: 25px; border: 1px solid #e2e8f0;">
+            <h3 style="color: #1e293b; margin: 0 0 12px 0; font-size: 16px;">Accepted Payment Methods</h3>
+            <div>${methodsChips || '<span style="color:#64748b;font-size:14px;">Payment methods will be sent with your invoice.</span>'}</div>
+            ${bankHtml}
+          </div>
+
             <!-- Next Steps -->
             <div style="background-color: #eff6ff; border: 1px solid #3b82f6; border-radius: 8px; padding: 20px; margin-bottom: 25px;">
               <h3 style="color: #15803d; margin: 0 0 15px 0; font-size: 16px;">
