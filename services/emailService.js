@@ -129,6 +129,7 @@ class EmailService {
     
     let actionButton = '';
     let bookingDetails = '';
+    let paymentBreakdown = '';
     
     // Add booking details if available
     if (data && data.bookingId) {
@@ -215,6 +216,50 @@ class EmailService {
         `;
         break;
       case 'booking_confirmed':
+        // Build payment breakdown if payment details provided
+        if (data) {
+          const totalAmount = Number(data.totalAmount ?? 0);
+          const depositAmount = Number(data.depositAmount ?? 0);
+          const finalDue = Number(data.finalDue ?? Math.max(0, (totalAmount - depositAmount)));
+          const taxAmount = Number(data.taxAmount ?? 0);
+          const gstRatePct = Number.isFinite(Number(data.gst)) ? Number(data.gst) : 10;
+          const taxType = data.taxType || 'Inclusive';
+          const subtotal = Math.max(0, Math.round(((totalAmount || 0) - (taxAmount || 0)) * 100) / 100);
+
+          paymentBreakdown = `
+            <div style="background-color: #f8fafc; border-radius: 8px; padding: 25px; margin: 10px 0 25px 0;">
+              <h3 style="color: #1e293b; margin: 0 0 16px 0; font-size: 18px; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px;">💳 Payment Breakdown</h3>
+              <table style="width: 100%; border-collapse: collapse;">
+                ${totalAmount ? `
+                <tr>
+                  <td style="padding: 10px 8px; color: #64748b; font-weight: 600;">Subtotal:</td>
+                  <td style="padding: 10px 8px; color: #1e293b; text-align: right;">$${subtotal.toFixed(2)} AUD</td>
+                </tr>
+                <tr>
+                  <td style="padding: 10px 8px; color: #64748b; font-weight: 600;">GST (${gstRatePct}%):</td>
+                  <td style="padding: 10px 8px; color: #1e293b; text-align: right;">$${taxAmount.toFixed(2)} AUD</td>
+                </tr>
+                <tr>
+                  <td style="padding: 12px 8px; color: #334155; font-weight: 700;">Total (incl. GST):</td>
+                  <td style="padding: 12px 8px; color: #059669; font-weight: 800; text-align: right;">$${totalAmount.toFixed(2)} AUD</td>
+                </tr>` : ''}
+                ${depositAmount ? `
+                <tr style="background-color: #dbeafe; border-top: 2px solid #3b82f6; border-bottom: 2px solid #3b82f6;">
+                  <td style="padding: 12px 8px; color: #1e40af; font-weight: 800;">💰 Deposit (pay first):</td>
+                  <td style="padding: 12px 8px; color: #1e40af; font-weight: 800; text-align: right;">-$${depositAmount.toFixed(2)} AUD</td>
+                </tr>` : ''}
+                <tr style="background-color: #dcfce7;">
+                  <td style="padding: 12px 8px; color: #166534; font-weight: 800;">Final Payment Due:</td>
+                  <td style="padding: 12px 8px; color: #166534; font-weight: 800; text-align: right;">$${finalDue.toFixed(2)} AUD</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 8px; color: #64748b; font-weight: 600;">Tax Type:</td>
+                  <td style="padding: 8px 8px; color: #1e293b; text-align: right;">${taxType}</td>
+                </tr>
+              </table>
+            </div>
+          `;
+        }
         if (data?.stripePaymentUrl) {
           actionButton = `
             <div style="text-align: center; margin: 30px 0;">
@@ -286,6 +331,7 @@ class EmailService {
             </div>
             
             ${bookingDetails}
+            ${paymentBreakdown}
             ${actionButton}
             
             <div style="border-top: 1px solid #e2e8f0; margin-top: 40px; padding-top: 30px; text-align: center;">

@@ -1192,12 +1192,14 @@ router.put('/:id/status', verifyToken, async (req, res) => {
         const stripePaymentUrl = updatePayload.stripePaymentUrl || (updatePayload.payment_details && updatePayload.payment_details.stripe_payment_url) || null;
         console.log('Email composition - stripePaymentUrl:', stripePaymentUrl ? 'present' : 'absent');
 
+        const paymentDetails = bookingForEmail.payment_details || {};
         const notificationData = {
           type: `booking_${status}`,
           title: notificationTitle,
-          message: notificationMessage + (stripePaymentUrl ? `\n\nPay your deposit securely here: ${stripePaymentUrl}` : ''),
+          message: notificationMessage,
           data: {
             bookingId: id,
+            bookingCode: bookingForEmail.bookingCode,
             eventType: bookingForEmail.eventType,
             bookingDate: bookingForEmail.bookingDate,
             startTime: bookingForEmail.startTime,
@@ -1205,10 +1207,15 @@ router.put('/:id/status', verifyToken, async (req, res) => {
             status: status,
             hallName: bookingForEmail.hallName,
             calculatedPrice: bookingForEmail.calculatedPrice,
-            // Surface deposit details for email rendering if present
+            // Payment breakdown for email rendering
+            totalAmount: paymentDetails.total_amount ?? null,
+            finalDue: paymentDetails.final_due ?? null,
+            taxType: paymentDetails.tax?.tax_type ?? null,
+            taxAmount: paymentDetails.tax?.tax_amount ?? null,
+            gst: paymentDetails.tax?.gst ?? null,
             depositType: bookingForEmail.depositType || 'None',
             depositValue: bookingForEmail.depositValue || 0,
-            depositAmount: bookingForEmail.depositAmount || bookingForEmail?.payment_details?.deposit_amount || 0,
+            depositAmount: bookingForEmail.depositAmount || paymentDetails.deposit_amount || 0,
             stripePaymentUrl: stripePaymentUrl
           }
         };
