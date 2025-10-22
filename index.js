@@ -7,6 +7,9 @@ require('dotenv').config();
 
 const app = express();
 app.use(cors());
+// Mount raw body for Stripe webhooks before JSON parser on that route
+const stripeWebhooks = require('./routes/stripeWebhooks');
+app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), stripeWebhooks);
 app.use(express.json());
 app.use(captureIP); // Capture IP addresses for all requests
 
@@ -66,6 +69,10 @@ app.use('/api/payments', paymentsRoutes);
 // Quotations routes
 const quotationsRoutes = require('./routes/quotations');
 app.use('/api/quotations', quotationsRoutes);
+
+// Connect routes
+const connectRoutes = require('./routes/connect');
+app.use('/api/connect', connectRoutes);
 
 // Login endpoint (verifies Firebase ID token and returns custom JWT)
 app.post('/api/login', async (req, res) => {

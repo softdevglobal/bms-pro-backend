@@ -215,15 +215,28 @@ class EmailService {
         `;
         break;
       case 'booking_confirmed':
-        actionButton = `
-          <div style="text-align: center; margin: 30px 0;">
-            <p style="color: #059669; margin-bottom: 20px;">🎉 Your booking has been confirmed!</p>
-            <a href="https://cranbourne-public-hall.vercel.app/booknow" 
-               style="background-color: #059669; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
-              View Booking Details
-            </a>
-          </div>
-        `;
+        if (data?.stripePaymentUrl) {
+          actionButton = `
+            <div style="text-align: center; margin: 30px 0;">
+              <p style="color: #059669; margin-bottom: 16px; font-weight: 600;">🎉 Your booking has been confirmed!</p>
+              <a href="${data.stripePaymentUrl}" 
+                 style="background-color: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
+                Pay Deposit Securely
+              </a>
+              <div style="color:#64748b; font-size:12px; margin-top:8px;">This link will take you to our secure payment page.</div>
+            </div>
+          `;
+        } else {
+          actionButton = `
+            <div style="text-align: center; margin: 30px 0;">
+              <p style="color: #059669; margin-bottom: 20px;">🎉 Your booking has been confirmed!</p>
+              <a href="https://cranbourne-public-hall.vercel.app/booknow" 
+                 style="background-color: #059669; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
+                View Booking Details
+              </a>
+            </div>
+          `;
+        }
         break;
       case 'booking_cancelled':
         actionButton = `

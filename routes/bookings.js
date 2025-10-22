@@ -2,6 +2,7 @@ const express = require('express');
 const admin = require('../firebaseAdmin');
 const emailService = require('../services/emailService');
 const { verifyToken } = require('../middleware/authMiddleware');
+const { createDepositCheckoutLink, getConnectedAccountStatus } = require('../services/stripeService');
 
 const router = express.Router();
 
@@ -1085,6 +1086,36 @@ router.put('/:id/status', verifyToken, async (req, res) => {
       }
     }
 
+    // If confirming and we have a positive deposit amount, generate Stripe link BEFORE saving
+    if (status === 'confirmed') {
+      try {
+        const depositForStripe = Number(
+          (updatePayload.payment_details && updatePayload.payment_details.deposit_amount) ||
+          updatePayload.depositAmount || 0
+        );
+        if (depositForStripe > 0) {
+          console.log('Attempting to generate Stripe link (pre-save)', { bookingId: id, depositForStripe });
+          const preSaveStripeUrl = await createDepositCheckoutLink({
+            hallOwnerId: actualHallOwnerId,
+            bookingId: id,
+            bookingCode: bookingData.bookingCode,
+            customerName: bookingData.customerName,
+            hallName: bookingData.hallName,
+            depositAmount: depositForStripe
+          });
+          if (preSaveStripeUrl) {
+            updatePayload.stripePaymentUrl = preSaveStripeUrl;
+            if (updatePayload.payment_details && typeof updatePayload.payment_details === 'object') {
+              updatePayload.payment_details.stripe_payment_url = preSaveStripeUrl;
+            }
+            console.log('Stripe link attached to update payload');
+          }
+        }
+      } catch (preStripeErr) {
+        console.warn('Stripe pre-save link generation failed (non-blocking):', preStripeErr?.message || preStripeErr);
+      }
+    }
+
     // Update booking status (and optional deposit fields)
     await admin.firestore().collection('bookings').doc(id).update(updatePayload);
 
@@ -1157,10 +1188,14 @@ router.put('/:id/status', verifyToken, async (req, res) => {
             notificationMessage = `Your booking for ${bookingForEmail.eventType} on ${bookingForEmail.bookingDate} status has been updated to ${status}.`;
         }
 
+        // Reuse pre-saved Stripe URL (if any) for the email content
+        const stripePaymentUrl = updatePayload.stripePaymentUrl || (updatePayload.payment_details && updatePayload.payment_details.stripe_payment_url) || null;
+        console.log('Email composition - stripePaymentUrl:', stripePaymentUrl ? 'present' : 'absent');
+
         const notificationData = {
           type: `booking_${status}`,
           title: notificationTitle,
-          message: notificationMessage,
+          message: notificationMessage + (stripePaymentUrl ? `\n\nPay your deposit securely here: ${stripePaymentUrl}` : ''),
           data: {
             bookingId: id,
             eventType: bookingForEmail.eventType,
@@ -1173,7 +1208,8 @@ router.put('/:id/status', verifyToken, async (req, res) => {
             // Surface deposit details for email rendering if present
             depositType: bookingForEmail.depositType || 'None',
             depositValue: bookingForEmail.depositValue || 0,
-            depositAmount: bookingForEmail.depositAmount || 0
+            depositAmount: bookingForEmail.depositAmount || bookingForEmail?.payment_details?.deposit_amount || 0,
+            stripePaymentUrl: stripePaymentUrl
           }
         };
 
@@ -1699,6 +1735,37 @@ router.get('/test', (req, res) => {
     timestamp: new Date().toISOString(),
     status: 'OK'
   });
+});
+
+// Diagnostic endpoint to test Stripe link generation and account readiness
+router.post('/diagnostics/stripe-link', verifyToken, async (req, res) => {
+  try {
+    const { hallOwnerId, bookingId, bookingCode, depositAmount, customerName, hallName } = req.body || {};
+    if (!hallOwnerId) return res.status(400).json({ message: 'hallOwnerId is required' });
+    const userSnap = await admin.firestore().collection('users').doc(hallOwnerId).get();
+    if (!userSnap.exists) return res.status(404).json({ message: 'Hall owner not found' });
+    const acct = userSnap.data().stripeAccountId;
+    const acctStatus = await getConnectedAccountStatus(acct);
+    console.log('Diagnostics: connected account', acctStatus);
+
+    const resultUrl = await createDepositCheckoutLink({
+      hallOwnerId,
+      bookingId: bookingId || 'diagnostic',
+      bookingCode: bookingCode || 'DIAG',
+      depositAmount: Number(depositAmount || 1),
+      customerName: customerName || 'Diagnostic',
+      hallName: hallName || 'Diagnostics'
+    });
+
+    res.json({
+      message: 'Diagnostics complete',
+      accountStatus: acctStatus,
+      link: resultUrl
+    });
+  } catch (err) {
+    console.error('Diagnostics failed:', err?.message || err);
+    res.status(500).json({ message: err?.message || 'Diagnostics failed' });
+  }
 });
 
 // Test route for email functionality
