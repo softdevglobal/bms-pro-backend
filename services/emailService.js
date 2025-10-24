@@ -1202,11 +1202,13 @@ class EmailService {
       }
       
       // Add deposit and final price information
+      const gstRatePct = Number.isFinite(Number(invoiceData.taxRate)) ? Number(invoiceData.taxRate) : 10;
+      const taxType = invoiceData.taxType || 'Inclusive';
       if (invoiceData.depositPaid > 0) {
         const fullAmount = invoiceData.fullAmountWithGST || invoiceData.total;
-        message += `\n\n💰 PAYMENT BREAKDOWN:\n- Full Amount (with GST): $${fullAmount.toFixed(2)} AUD\n- 💰 Deposit Already Paid: $${invoiceData.depositPaid.toFixed(2)} AUD\n\n💳 FINAL PAYMENT DUE: $${invoiceData.finalTotal.toFixed(2)} AUD\n\nCalculation: $${fullAmount.toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)} AUD`;
+        message += `\n\n💰 PAYMENT BREAKDOWN:\n- Tax Type: ${taxType}\n- GST (${gstRatePct}%): $${(invoiceData.gst ?? 0).toFixed(2)} AUD\n- Full Amount (with GST): $${fullAmount.toFixed(2)} AUD\n- 💰 Deposit Already Paid: $${invoiceData.depositPaid.toFixed(2)} AUD\n\n💳 FINAL PAYMENT DUE: $${invoiceData.finalTotal.toFixed(2)} AUD\n\nCalculation: $${fullAmount.toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)} AUD`;
       } else {
-        message += `\n\n💳 AMOUNT YOU NEED TO PAY: $${invoiceData.total.toFixed(2)} AUD`;
+        message += `\n\n💰 TAX DETAILS:\n- Tax Type: ${taxType}\n- GST (${gstRatePct}%): $${(invoiceData.gst ?? 0).toFixed(2)} AUD\n\n💳 AMOUNT YOU NEED TO PAY: $${invoiceData.total.toFixed(2)} AUD`;
       }
       
       message += `\n- Status: ${invoiceData.status}\n\nPayment is due within 30 days of the invoice date. Please refer to the attached PDF for payment details and bank information.\n\nThank you for your business!`;
@@ -1299,6 +1301,14 @@ class EmailService {
                   <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Full Amount (with GST):</td>
                   <td style="padding: 8px 0; color: #1e293b;">$${(invoiceData.fullAmountWithGST || invoiceData.total).toFixed(2)} AUD</td>
                 </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Tax Type:</td>
+                  <td style="padding: 8px 0; color: #1e293b;">${invoiceData.taxType || 'Inclusive'}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">GST (${Number.isFinite(Number(invoiceData.taxRate)) ? Number(invoiceData.taxRate) : 10}%):</td>
+                  <td style="padding: 8px 0; color: #1e293b;">$${(invoiceData.gst ?? 0).toFixed(2)} AUD</td>
+                </tr>
                 <tr style="background-color: #dbeafe;">
                   <td style="padding: 12px 8px; color: #1e40af; font-weight: bold; font-size: 16px;">💰 Deposit Already Paid:</td>
                   <td style="padding: 12px 8px; color: #1e40af; font-weight: bold; font-size: 16px;">-$${invoiceData.depositPaid.toFixed(2)} AUD</td>
@@ -1313,8 +1323,12 @@ class EmailService {
                   <td style="padding: 8px 0; color: #1e293b;">$${invoiceData.subtotal.toFixed(2)}</td>
                 </tr>
                 <tr>
-                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">GST (10%):</td>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">GST (${Number.isFinite(Number(invoiceData.taxRate)) ? Number(invoiceData.taxRate) : 10}%):</td>
                   <td style="padding: 8px 0; color: #1e293b;">$${invoiceData.gst.toFixed(2)}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Tax Type:</td>
+                  <td style="padding: 8px 0; color: #1e293b;">${invoiceData.taxType || 'Inclusive'}</td>
                 </tr>
                 <tr style="background-color: #dcfce7; border: 2px solid #22c55e;">
                   <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 20px;">💳 Amount Due:</td>

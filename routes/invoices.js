@@ -87,10 +87,27 @@ async function generateInvoicePDF(invoiceData) {
       const accentColor = '#059669'; // Green
       const lightGray = '#f1f5f9';
       const darkGray = '#334155';
+      const pageWidth = doc.page.width;
+      const pageHeight = doc.page.height;
+      const margin = 40;
 
-      // Header with gradient-like effect
-      doc.rect(0, 0, 595, 120)
-         .fill(primaryColor);
+      // Helper: page background gradient
+      const drawPageBackground = () => {
+        const bg = doc.linearGradient(0, 0, pageWidth, pageHeight);
+        bg.stop(0, '#f8fafc');
+        bg.stop(1, '#eef2ff');
+        doc.rect(0, 0, pageWidth, pageHeight).fill(bg);
+      };
+      drawPageBackground();
+      doc.on('pageAdded', drawPageBackground);
+
+      // (Background handled above)
+
+      // Header gradient strip
+      const headerGradient = doc.linearGradient(0, 0, 595, 120);
+      headerGradient.stop(0, primaryColor);
+      headerGradient.stop(1, '#4338ca');
+      doc.rect(0, 0, 595, 120).fill(headerGradient);
       
       // Company logo area (placeholder)
       doc.rect(40, 20, 60, 60)
@@ -118,8 +135,8 @@ async function generateInvoicePDF(invoiceData) {
          .font('Helvetica-Bold')
          .text('INVOICE', 50, 45, { width: 495, align: 'right' });
 
-      // Invoice details box
-      doc.rect(40, 140, 515, 80)
+      // Invoice banner card
+      doc.roundedRect(40, 140, 515, 80, 8)
          .fill(lightGray)
          .stroke(secondaryColor, 1);
       
@@ -216,14 +233,38 @@ async function generateInvoicePDF(invoiceData) {
         }
       }
 
+      // Invoice summary cells
+      const summaryY = invoiceData.bookingSource === 'quotation' ? 440 : 370;
+      const cellWidth = Math.floor(505 / 4);
+      const cellLabels = ['Full Amount (incl. GST)', 'Deposit Paid', 'Final Due', 'Tax'];
+      const fullAmount = (invoiceData.fullAmountWithGST || invoiceData.total) || 0;
+      const depositAmount = Number(invoiceData.depositPaid || 0);
+      const finalDue = Number((invoiceData.depositPaid > 0 ? invoiceData.finalTotal : invoiceData.total) || 0);
+      const taxDisplay = `${invoiceData.taxType || 'Inclusive'} (${invoiceData.taxRate ?? 10}%)`;
+      const cellValues = [
+        `$${fullAmount.toFixed(2)} AUD`,
+        `$${depositAmount.toFixed(2)} AUD`,
+        `$${finalDue.toFixed(2)} AUD`,
+        taxDisplay
+      ];
+      for (let i = 0; i < 4; i++) {
+        const x = 50 + i * cellWidth;
+        doc.roundedRect(x, summaryY, cellWidth - (i === 3 ? 0 : 6), 60, 8)
+           .fill('#ffffff')
+           .stroke('#e2e8f0', 1);
+        doc.fillColor('#64748b').font('Helvetica').fontSize(8).text(cellLabels[i], x + 10, summaryY + 10, { width: cellWidth - 20, align: 'left' });
+        doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(12).text(cellValues[i], x + 10, summaryY + 26, { width: cellWidth - 20, align: 'left' });
+      }
+
       // Line items table
+      const itemsTitleY = summaryY + 80;
       doc.fillColor(primaryColor)
          .fontSize(14)
          .font('Helvetica-Bold')
-         .text('INVOICE ITEMS', 50, invoiceData.bookingSource === 'quotation' ? 450 : 380);
+         .text('INVOICE ITEMS', 50, itemsTitleY);
       
       // Table header
-      const tableStartY = invoiceData.bookingSource === 'quotation' ? 460 : 390;
+      const tableStartY = itemsTitleY + 10;
       doc.rect(50, tableStartY, 505, 25)
          .fill(primaryColor);
       
@@ -236,9 +277,9 @@ async function generateInvoicePDF(invoiceData) {
          .text('Amount', 500, tableStartY + 8, { width: 45, align: 'right' });
 
       // Table row
-      doc.rect(50, tableStartY + 25, 505, 30)
+      doc.roundedRect(50, tableStartY + 25, 505, 30, 6)
          .fill('#ffffff')
-         .stroke(secondaryColor, 1);
+         .stroke('#cbd5e1', 1);
       
       doc.fillColor(darkGray)
          .fontSize(10)
@@ -248,13 +289,13 @@ async function generateInvoicePDF(invoiceData) {
          .text(`$${invoiceData.subtotal.toFixed(2)}`, 400, tableStartY + 35)
          .text(`$${invoiceData.subtotal.toFixed(2)}`, 500, tableStartY + 35, { width: 45, align: 'right' });
 
-      // Totals section
+      // Totals section card
       let currentY = tableStartY + 70; // Position after table
-      const totalsHeight = invoiceData.depositPaid > 0 ? 100 : 80; // Extra space for deposit info
+      const totalsHeight = invoiceData.depositPaid > 0 ? 130 : 100; // Extra space for tax details
       
-      doc.rect(350, currentY, 205, totalsHeight)
+      doc.roundedRect(350, currentY, 205, totalsHeight, 8)
          .fill('#ffffff')
-         .stroke(secondaryColor, 1);
+         .stroke('#e2e8f0', 1);
       
       // Show different breakdown based on whether there's a deposit
       if (invoiceData.depositPaid > 0) {
@@ -273,8 +314,16 @@ async function generateInvoicePDF(invoiceData) {
            .fontSize(8)
            .font('Helvetica')
            .text(`Calculation: $${fullAmount.toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)}`, 360, currentY + 40, { width: 185, align: 'center' });
-        
-        currentY += 30; // Extra space for deposit line and calculation
+
+        // Tax details
+        doc.fillColor(darkGray)
+           .fontSize(10)
+           .font('Helvetica')
+           .text(`Tax Type: ${invoiceData.taxType || 'Inclusive'}`, 360, currentY + 55)
+           .text(`GST (${(invoiceData.taxRate ?? 10)}%):`, 360, currentY + 70)
+           .text(`$${(invoiceData.gst ?? 0).toFixed(2)}`, 500, currentY + 70, { width: 45, align: 'right' });
+
+        currentY += 50; // Extra space for deposit line, calculation, and tax details
       } else {
         // For invoices without deposits, show normal breakdown
         doc.fillColor(darkGray)
@@ -282,11 +331,13 @@ async function generateInvoicePDF(invoiceData) {
            .font('Helvetica')
            .text('Subtotal:', 360, currentY + 10)
            .text(`$${invoiceData.subtotal.toFixed(2)}`, 500, currentY + 10, { width: 45, align: 'right' })
-           .text('GST (10%):', 360, currentY + 25)
-           .text(`$${invoiceData.gst.toFixed(2)}`, 500, currentY + 25, { width: 45, align: 'right' });
+           .text(`GST (${(invoiceData.taxRate ?? 10)}%):`, 360, currentY + 25)
+           .text(`$${invoiceData.gst.toFixed(2)}`, 500, currentY + 25, { width: 45, align: 'right' })
+           .fontSize(10)
+           .text(`Tax Type: ${invoiceData.taxType || 'Inclusive'}`, 360, currentY + 40);
       }
       
-      doc.rect(350, currentY + 40, 205, 40)
+      doc.roundedRect(350, currentY + 40, 205, 40, 8)
          .fill(accentColor);
       
       doc.fillColor('#ffffff')
@@ -296,25 +347,42 @@ async function generateInvoicePDF(invoiceData) {
          .fontSize(20)
          .text(`$${invoiceData.finalTotal.toFixed(2)} AUD`, 360, currentY + 65, { width: 185, align: 'right' });
 
-      // Add calculation summary box
+      // Large FINAL DUE banner centered (ensure it stays on current page)
+      let bannerY = currentY + (invoiceData.depositPaid > 0 ? 90 : 70);
+      if (bannerY + 150 > pageHeight - margin) {
+        doc.addPage();
+        // new page background auto-drawn via pageAdded handler
+        bannerY = margin + 40;
+      }
+      const bannerGradient = doc.linearGradient(50, bannerY, 555, bannerY);
+      bannerGradient.stop(0, '#16a34a');
+      bannerGradient.stop(1, '#0ea5e9');
+      doc.roundedRect(50, bannerY, 505, 60, 12).fill(bannerGradient);
+      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(14)
+         .text(invoiceData.depositPaid > 0 ? 'FINAL PAYMENT DUE' : 'TOTAL DUE', 60, bannerY + 10, { width: 485, align: 'center' });
+      doc.fontSize(24)
+         .text(`$${(invoiceData.finalTotal || invoiceData.total).toFixed(2)} AUD`, 60, bannerY + 28, { width: 485, align: 'center' });
+
+      // Calculation summary below banner (if deposit exists)
       if (invoiceData.depositPaid > 0) {
-        doc.rect(50, currentY + 100, 505, 40)
+        doc.roundedRect(50, bannerY + 70, 505, 34, 8)
            .fill('#f8fafc')
            .stroke('#e2e8f0', 1);
-        
-        doc.fillColor('#1e293b')
-           .fontSize(12)
-           .font('Helvetica-Bold')
-           .text('CALCULATION SUMMARY', 60, currentY + 115);
-        
-        doc.fillColor('#475569')
-           .fontSize(10)
-           .font('Helvetica')
-           .text(invoiceData.calculationBreakdown?.formula || `Final Payment = $${(invoiceData.fullAmountWithGST || invoiceData.total).toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)}`, 60, currentY + 130, { width: 485 });
+        doc.fillColor('#64748b').font('Helvetica').fontSize(9)
+           .text(
+             invoiceData.calculationBreakdown?.formula || `Final Payment = $${(invoiceData.fullAmountWithGST || invoiceData.total).toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)}`,
+             60,
+             bannerY + 82,
+             { width: 485, align: 'center' }
+           );
       }
 
       // Deposit information section (if applicable)
-      let paymentSectionY = invoiceData.depositPaid > 0 ? 600 : 560; // Adjust based on calculation summary
+      let paymentSectionY = (invoiceData.depositPaid > 0 ? (bannerY + 115) : (bannerY + 30));
+      if (paymentSectionY + 180 > pageHeight - margin) {
+        doc.addPage();
+        paymentSectionY = margin + 10;
+      }
       if (invoiceData.depositPaid > 0) {
         doc.fillColor(primaryColor)
            .fontSize(14)
@@ -340,7 +408,7 @@ async function generateInvoicePDF(invoiceData) {
           doc.text(`Percentage: ${invoiceData.depositInfo?.value}%`, 300, paymentSectionY + 35);
         }
         
-        paymentSectionY += 70; // Move payment section down
+        paymentSectionY += 80; // Move payment section down
       }
 
       // Payment information
@@ -349,9 +417,9 @@ async function generateInvoicePDF(invoiceData) {
          .font('Helvetica-Bold')
          .text('PAYMENT INFORMATION', 50, paymentSectionY);
       
-      doc.rect(50, paymentSectionY + 10, 505, 60)
+      doc.roundedRect(50, paymentSectionY + 10, 505, 60, 8)
          .fill('#ffffff')
-         .stroke(secondaryColor, 1);
+         .stroke('#e2e8f0', 1);
       
       doc.fillColor(secondaryColor)
          .fontSize(10)
@@ -369,9 +437,9 @@ async function generateInvoicePDF(invoiceData) {
            .font('Helvetica-Bold')
            .text('ADDITIONAL NOTES', 50, notesSectionY);
         
-        doc.rect(50, notesSectionY + 10, 505, 30)
+        doc.roundedRect(50, notesSectionY + 10, 505, 30, 8)
            .fill('#ffffff')
-           .stroke(secondaryColor, 1);
+           .stroke('#e2e8f0', 1);
         
         doc.fillColor(secondaryColor)
            .fontSize(9)
@@ -503,6 +571,29 @@ router.post('/', verifyToken, async (req, res) => {
     let depositPaid = 0;
     let depositInfo = null;
     let fullAmountWithGST = subtotal; // This is the full booking amount with GST already included
+    // Resolve tax metadata for display
+    let taxType = 'Inclusive';
+    let taxRatePct = 10;
+    try {
+      const hoDoc = await admin.firestore().collection('users').doc(actualHallOwnerId).get();
+      const hallSettings = hoDoc?.data?.() ? hoDoc.data().settings : null;
+      if (hallSettings) {
+        if (typeof hallSettings.taxType === 'string' && ['Inclusive', 'Exclusive'].includes(hallSettings.taxType)) {
+          taxType = hallSettings.taxType;
+        }
+        if (Number.isFinite(Number(hallSettings.taxRate))) {
+          taxRatePct = Number(hallSettings.taxRate);
+        }
+      }
+    } catch (_) {
+      // best-effort
+    }
+    // Prefer explicit booking payment_details.tax if present
+    if (bookingData?.payment_details?.tax) {
+      const taxObj = bookingData.payment_details.tax;
+      if (typeof taxObj.tax_type === 'string') taxType = String(taxObj.tax_type);
+      if (Number.isFinite(Number(taxObj.gst))) gst = Number(taxObj.gst);
+    }
     
     console.log('Invoice creation - checking deposit info:', {
       invoiceType,
@@ -512,8 +603,8 @@ router.post('/', verifyToken, async (req, res) => {
       depositValue: bookingData.depositValue
     });
     
-    // Apply deposit deduction on FINAL invoices whenever booking has a deposit, regardless of source
-    if (invoiceType === 'FINAL' && bookingData.depositType && bookingData.depositType !== 'None') {
+    // Apply deposit deduction on FINAL invoices whenever booking has a deposit (either legacy fields or unified payment_details)
+    if (invoiceType === 'FINAL' && ((bookingData.depositType && bookingData.depositType !== 'None') || (bookingData.payment_details && Number(bookingData.payment_details.deposit_amount) > 0))) {
       // Get the full quoted total (already includes GST)
       const fullQuotedTotal = req.body.fullQuotedTotal || bookingData.calculatedPrice || bookingData.totalAmount;
       if (fullQuotedTotal && !Number.isNaN(Number(fullQuotedTotal))) {
@@ -527,12 +618,21 @@ router.post('/', verifyToken, async (req, res) => {
       const baseAmount = fullAmountWithGST / 1.1; // Remove GST to get base amount
       gst = fullAmountWithGST - baseAmount; // Calculate GST amount
       
-      depositPaid = req.body.depositAmount !== undefined ? parseFloat(req.body.depositAmount) : (bookingData.depositAmount || 0);
+      // Prefer unified payment_details.deposit_amount when present
+      depositPaid = req.body.depositAmount !== undefined
+        ? parseFloat(req.body.depositAmount)
+        : (Number(bookingData.payment_details?.deposit_amount) || bookingData.depositAmount || 0);
       finalTotal = total - depositPaid;
       
+      // Ensure no undefined values are saved to Firestore (use null instead)
+      const resolvedDepositType = req.body.depositType || bookingData.payment_details?.deposit_type || bookingData.depositType || 'Fixed';
+      const resolvedDepositValue = (req.body.depositValue !== undefined)
+        ? req.body.depositValue
+        : (bookingData.depositValue !== undefined ? bookingData.depositValue : null);
+
       depositInfo = {
-        type: req.body.depositType || bookingData.depositType,
-        value: req.body.depositValue !== undefined ? req.body.depositValue : bookingData.depositValue,
+        type: resolvedDepositType,
+        value: resolvedDepositValue,
         amount: depositPaid
       };
       
@@ -547,7 +647,7 @@ router.post('/', verifyToken, async (req, res) => {
     } else if (invoiceType === 'DEPOSIT' && bookingData.depositType && bookingData.depositType !== 'None') {
       // For deposit invoices, the amount already includes GST
       // Calculate GST from the deposit amount
-      const baseAmount = subtotal / 1.1; // Remove GST to get base amount
+      const baseAmount = subtotal / (1 + (taxRatePct / 100)); // Remove GST to get base amount
       gst = subtotal - baseAmount; // Calculate GST amount
       
       const expectedDepositAmount = bookingData.depositAmount || 0;
@@ -566,7 +666,7 @@ router.post('/', verifyToken, async (req, res) => {
       });
     } else {
       // For other invoice types, calculate GST normally
-      const baseAmount = subtotal / 1.1; // Remove GST to get base amount
+      const baseAmount = subtotal / (1 + (taxRatePct / 100)); // Remove GST to get base amount
       gst = subtotal - baseAmount; // Calculate GST amount
       total = subtotal;
       
@@ -598,6 +698,8 @@ router.post('/', verifyToken, async (req, res) => {
       subtotal: subtotal,
       gst: gst,
       total: total,
+      taxType: taxType,
+      taxRate: taxRatePct,
       fullAmountWithGST: fullAmountWithGST, // Full booking amount with GST included
       finalTotal: finalTotal, // Final amount after deposit deduction
       depositPaid: depositPaid, // Amount already paid as deposit
