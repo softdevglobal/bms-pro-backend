@@ -62,8 +62,227 @@ async function getHallOwnerLogoBuffer(hallOwnerId) {
   }
 }
 
-// Helper function to generate invoice PDF
-async function generateInvoicePDF(invoiceData) {
+// HTML-based PDF (Puppeteer) - build HTML string with artistic background
+function buildInvoiceHTML(invoiceData) {
+  const fmt = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const toDate = (d) => d?.toDate?.() || (d instanceof Date ? d : null);
+  const issue = (toDate(invoiceData.issueDate) || new Date()).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' });
+  const due = (toDate(invoiceData.dueDate) || new Date()).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' });
+  const invoiceNo = invoiceData.invoiceNumber || '';
+  const type = (invoiceData.invoiceType || 'INVOICE').toUpperCase();
+  const heading = type === 'FINAL' ? 'FINAL INVOICE' : `${type} INVOICE`;
+  const customerName = invoiceData.customer?.name || '';
+  const customerEmail = invoiceData.customer?.email || '';
+  const subtotal = Number(invoiceData.subtotal || 0);
+  const gst = Number(invoiceData.gst || 0);
+  const totalIncl = Number(invoiceData.total || 0);
+  const depositPaid = Number(invoiceData.depositPaid || 0);
+  const totalDue = Number((depositPaid > 0 && invoiceData.finalTotal) ? invoiceData.finalTotal : totalIncl);
+  const taxRate = Number(invoiceData.taxRate ?? 10);
+  const taxRateDisplay = Number.isInteger(taxRate) ? String(taxRate) : taxRate.toFixed(2).replace(/\.00$/, '');
+  const bookingRef = invoiceData.bookingCode || invoiceData.bookingId || '';
+  const items = Array.isArray(invoiceData.lineItems) && invoiceData.lineItems.length > 0
+    ? invoiceData.lineItems.map(li => ({
+        description: li.description || 'Item',
+        unit: li.unit || 'Service',
+        qty: Number(li.quantity || 1),
+        price: Number(li.unitPrice || 0),
+        total: Number((li.quantity || 1) * (li.unitPrice || 0))
+      }))
+    : [{ description: invoiceData.description || `${invoiceData.resource || 'Service'} — ${type} Payment`, unit: 'Service', qty: 1, price: totalIncl, total: totalIncl }];
+
+  const itemsRows = items.map(li => `
+      <tr>
+        <td style="padding:12px 8px;border-bottom:1px solid #e2e8f0;">${li.description}</td>
+        <td style="padding:12px 8px;border-bottom:1px solid #e2e8f0;">${li.unit}</td>
+        <td style="padding:12px 8px;text-align:right;border-bottom:1px solid #e2e8f0;">${Number.isInteger(li.qty) ? li.qty : fmt(li.qty)}</td>
+        <td style="padding:12px 8px;text-align:right;border-bottom:1px solid #e2e8f0;">${fmt(li.price)}</td>
+        <td style="padding:12px 8px;text-align:right;border-bottom:1px solid #e2e8f0;">${fmt(li.total)}</td>
+      </tr>`).join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>${heading} — ALO Solutions</title>
+<style>
+  @page { size: A4; margin: 16mm 10mm; }
+  :root {
+    --ink: #0f172a;
+    --muted: #475569;
+    --muted-2: #5b6b75;
+    --line: #e2e8f0;
+    --brand-a: #1f8ea6;
+    --brand-b: #0b6b8a;
+    --accent-a: #16a34a;
+    --accent-b: #0ea5e9;
+    --paper: #ffffff;
+  }
+  body { margin:0; padding:0; font-family: Arial, Helvetica, sans-serif; color: var(--ink); -webkit-print-color-adjust: exact; background: var(--paper); }
+  .container { max-width: 800px; margin: 100px auto; padding: 0 40px; box-sizing: border-box; }
+  .header { position: relative; margin-bottom: 50px; }
+  .header::after { content: ""; position:absolute; left:0; right:0; bottom:-16px; height:3px; background: linear-gradient(90deg, var(--brand-a), var(--brand-b)); border-radius: 2px; }
+  .brand { display:flex; align-items:center; gap:12px; }
+  .brand-title { font-weight:700; font-size:16px; }
+  .brand-sub { font-size:12px; color: var(--muted); }
+  .title { font-size:26px; font-weight:700; letter-spacing:.5px; }
+  .muted { color: var(--muted-2); }
+  .items { width:100%; border-collapse: collapse; font-size:13px; margin-bottom:25px; }
+  .items thead th { text-align:left; padding:10px 8px; color:#fff; background: linear-gradient(90deg, var(--brand-a), var(--brand-b)); }
+  .items tbody td { padding:12px 8px; border-bottom:1px solid var(--line); }
+  .items tbody tr:nth-child(odd) td { background: rgba(2, 132, 199, 0.03); }
+  .right { text-align:right; }
+  .totals-card { width:260px; font-size:13px; background: rgba(255,255,255,.88); border:1px solid var(--line); border-radius:12px; box-shadow: 0 6px 18px rgba(15,23,42,0.06); padding: 10px 12px; }
+  .totals-card .row { display:flex; justify-content:space-between; padding:6px 0; }
+  .totals-card .grand { display:flex; justify-content:space-between; padding:12px 0; margin-top:6px; border-top:1px solid var(--line); font-weight:700; font-size:15px; }
+  @media print { .container { margin: 60px auto; } }
+</style>
+</head>
+<body>
+
+<!-- Artistic Watercolor Background (inline SVG) -->
+<div style="position:fixed;inset:0;z-index:-2;pointer-events:none;">
+  <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 900' preserveAspectRatio='none' style="width:100%;height:100%;">
+    <defs>
+      <radialGradient id='g1' cx='80%' cy='20%' r='70%'>
+        <stop offset='0%' stop-color='#ffeac1' stop-opacity='0.9'/>
+        <stop offset='50%' stop-color='#ffd7b2' stop-opacity='0.5'/>
+        <stop offset='100%' stop-color='#ffffff' stop-opacity='0'/>
+      </radialGradient>
+      <radialGradient id='g2' cx='10%' cy='80%' r='80%'>
+        <stop offset='0%' stop-color='#c8f3ff' stop-opacity='0.8'/>
+        <stop offset='50%' stop-color='#b3e7f9' stop-opacity='0.45'/>
+        <stop offset='100%' stop-color='#ffffff' stop-opacity='0'/>
+      </radialGradient>
+      <filter id='paint' x='-20%' y='-20%' width='140%' height='140%'>
+        <feTurbulence baseFrequency='0.005' numOctaves='3' seed='2'/>
+        <feGaussianBlur stdDeviation='30'/>
+      </filter>
+    </defs>
+    <rect width='1200' height='900' fill='url(#g1)'/>
+    <rect width='1200' height='900' fill='url(#g2)'/>
+    <g opacity='0.15'>
+      <path d='M0,300 C200,180 400,120 620,180 C840,240 980,260 1200,200 L1200,900 L0,900 Z' fill='#ffd6b3'/>
+      <path d='M0,100 C280,40 520,60 720,120 C860,160 980,180 1200,120 L1200,0 L0,0 Z' fill='#d6f0ff'/>
+    </g>
+  </svg>
+ </div>
+
+ <!-- Optional Faint Watermark -->
+ <img src="https://via.placeholder.com/900x200?text=ALO+Solutions+Watermark" alt="" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%) rotate(-8deg);opacity:0.05;width:70%;max-width:900px;z-index:-1;">
+
+ <!-- Invoice Content -->
+ <div class="container">
+
+  <!-- Header -->
+  <div class="header" style="display:flex;justify-content:space-between;align-items:flex-start;">
+    <div class="brand">
+      <img src="https://via.placeholder.com/300x90?text=ALO+Solutions+Logo" alt="ALO Solutions Logo" style="width:160px;height:auto;">
+      <div>
+        <div class="brand-title">ALO Solutions Pvt Ltd</div>
+        <div class="brand-sub">123 Business Street, Colombo, Sri Lanka<br>+94 77 123 4567</div>
+      </div>
+    </div>
+    <div style="text-align:right;">
+      <div class="title">${heading}</div>
+      <div style="font-size:13px;margin-top:6px;">Invoice #: <strong>${invoiceNo}</strong></div>
+      <div style="font-size:13px;">Date: <strong>${issue}</strong></div>
+      <div style="font-size:13px;">Due: <strong>${due}</strong></div>
+    </div>
+  </div>
+
+  <!-- Billing -->
+  <div style="display:flex;justify-content:space-between;font-size:13px;color:#23303d;margin-bottom:25px;">
+    <div>
+      <div style="font-weight:700;">Bill To</div>
+      <div>${customerName || 'Client'}</div>
+      <div style="font-size:12px;color:#5b6b75;">${customerEmail || ''}</div>
+    </div>
+    <div style="text-align:right;">
+      <div style="font-weight:700;">Booking Reference</div>
+      <div>${bookingRef}</div>
+      <div style="height:8px"></div>
+      <div style="font-weight:700;">Payment</div>
+      <div>Bank Transfer</div>
+      <div style="font-size:12px;color:#5b6b75;">Example Bank – IBAN: LK00 0000 0000 0000</div>
+    </div>
+  </div>
+
+  <!-- Items -->
+  <table class="items" style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:25px;">
+    <thead>
+      <tr>
+        <th style="text-align:left;padding:10px 8px;color:#fff;background:linear-gradient(90deg,#1f8ea6,#0b6b8a);">Description</th>
+        <th style="text-align:left;padding:10px 8px;color:#fff;background:linear-gradient(90deg,#1f8ea6,#0b6b8a);">Unit</th>
+        <th style="text-align:right;padding:10px 8px;color:#fff;background:linear-gradient(90deg,#1f8ea6,#0b6b8a);">Qty</th>
+        <th style="text-align:right;padding:10px 8px;color:#fff;background:linear-gradient(90deg,#1f8ea6,#0b6b8a);">Unit Price</th>
+        <th style="text-align:right;padding:10px 8px;color:#fff;background:linear-gradient(90deg,#1f8ea6,#0b6b8a);">Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${itemsRows}
+    </tbody>
+  </table>
+
+  <!-- Totals -->
+  <div style="display:flex;justify-content:flex-end;margin-top:10px;">
+    <div class="totals-card">
+      <div class="row"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
+      <div class="row"><span>Tax (${taxRateDisplay}%)</span><span>${fmt(gst)}</span></div>
+      ${depositPaid > 0 ? `<div class="row"><span>Deposit Paid</span><span>- ${fmt(depositPaid)}</span></div>` : ''}
+      <div class="grand"><span>Total Due</span><span>${fmt(totalDue)}</span></div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-top:50px;font-size:12px;color:#475569;">
+    <div>
+      <div style="font-weight:700;margin-bottom:6px;">Notes & Terms</div>
+      <div>${invoiceData.notes || 'Thank you for your business. Payment due within 14 days. Please include invoice number when paying.'}</div>
+    </div>
+    <div style="text-align:right;">
+      <div>Authorized by</div>
+      <div style="font-weight:700;margin-top:15px;color:#0f172a;">Jane Doe</div>
+      <div>Director, ALO Solutions</div>
+    </div>
+  </div>
+
+ </div>
+
+</body>
+</html>`;
+}
+
+async function tryGenerateHtmlPDF(invoiceData) {
+  try {
+    const puppeteer = require('puppeteer');
+    // Best-effort enrich with bookingCode for reference if not already present
+    if (!invoiceData.bookingCode && invoiceData.bookingId) {
+      try {
+        const admin = require('../firebaseAdmin');
+        const bookingDoc = await admin.firestore().collection('bookings').doc(invoiceData.bookingId).get();
+        if (bookingDoc.exists) {
+          const bookingData = bookingDoc.data();
+          if (bookingData.bookingCode) invoiceData.bookingCode = bookingData.bookingCode;
+        }
+      } catch (_e) {
+        // ignore enrichment errors; proceed without bookingCode
+      }
+    }
+    const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox','--disable-setuid-sandbox'] });
+    const page = await browser.newPage();
+    const html = buildInvoiceHTML(invoiceData);
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    const buffer = await page.pdf({ format: 'A4', printBackground: true, margin: { top: '16mm', bottom: '16mm', left: '10mm', right: '10mm' } });
+    await browser.close();
+    return buffer;
+  } catch (e) {
+    throw e;
+  }
+}
+
+// Helper function to generate invoice PDF with PDFKit (fallback)
+async function generateInvoicePDF_PDFKit(invoiceData) {
   // Fetch logo buffer before PDF generation (non-blocking if fails)
   const logoBuffer = await getHallOwnerLogoBuffer(invoiceData.hallOwnerId);
   return new Promise((resolve, reject) => {
@@ -101,7 +320,7 @@ async function generateInvoicePDF(invoiceData) {
       drawPageBackground();
       doc.on('pageAdded', drawPageBackground);
 
-      // (Background handled above)
+      // (Background handled above in HTML version; here minimal background is drawn via gradient header only)
 
       // Header gradient strip
       const headerGradient = doc.linearGradient(0, 0, 595, 120);
@@ -152,7 +371,8 @@ async function generateInvoicePDF(invoiceData) {
          .text(`Issue Date: ${(invoiceData.issueDate?.toDate?.() || (invoiceData.issueDate instanceof Date ? invoiceData.issueDate : new Date())).toLocaleDateString('en-AU')}`
            , 50, 185)
          .text(`Due Date: ${(() => { const d = invoiceData.dueDate?.toDate?.() || (invoiceData.dueDate instanceof Date ? invoiceData.dueDate : null); return d ? d.toLocaleDateString('en-AU') : 'N/A'; })()}`
-           , 50, 200);
+           , 50, 200)
+         .text(`Booking Reference: ${invoiceData.bookingCode || invoiceData.bookingId || ''}`, 320, 170); // added booking reference
 
       // Customer details section
       doc.fillColor(primaryColor)
@@ -479,6 +699,16 @@ async function generateInvoicePDF(invoiceData) {
       reject(error);
     }
   });
+}
+
+// Wrapper: try HTML-based first, then fallback
+async function generateInvoicePDF(invoiceData) {
+  try {
+    return await tryGenerateHtmlPDF(invoiceData);
+  } catch (e) {
+    console.warn('HTML renderer unavailable, falling back to PDFKit:', e?.message || e);
+    return await generateInvoicePDF_PDFKit(invoiceData);
+  }
 }
 
 // POST /api/invoices - Create a new invoice from booking

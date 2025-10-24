@@ -23,7 +23,8 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.2",
     "nodemailer": "^7.0.6",
-    "pdfkit": "^0.15.2"
+    "pdfkit": "^0.15.2",
+    "puppeteer": "^23.7.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"
