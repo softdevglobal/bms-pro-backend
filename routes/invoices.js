@@ -81,6 +81,10 @@ function buildInvoiceHTML(invoiceData) {
   const taxRate = Number(invoiceData.taxRate ?? 10);
   const taxRateDisplay = Number.isInteger(taxRate) ? String(taxRate) : taxRate.toFixed(2).replace(/\.00$/, '');
   const bookingRef = invoiceData.bookingCode || invoiceData.bookingId || '';
+  const companyName = invoiceData.hallOwnerName || 'Cranbourne Public Hall';
+  const companyAddress = invoiceData.hallOwnerAddress || '';
+  const logoUrl = invoiceData.hallOwnerLogoUrl || 'https://via.placeholder.com/300x90?text=Logo';
+
   const items = Array.isArray(invoiceData.lineItems) && invoiceData.lineItems.length > 0
     ? invoiceData.lineItems.map(li => ({
         description: li.description || 'Item',
@@ -104,43 +108,22 @@ function buildInvoiceHTML(invoiceData) {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>${heading} — ALO Solutions</title>
+<title>${heading} — ${companyName}</title>
 <style>
   @page { size: A4; margin: 16mm 10mm; }
-  :root {
-    --ink: #0f172a;
-    --muted: #475569;
-    --muted-2: #5b6b75;
-    --line: #e2e8f0;
-    --brand-a: #1f8ea6;
-    --brand-b: #0b6b8a;
-    --accent-a: #16a34a;
-    --accent-b: #0ea5e9;
-    --paper: #ffffff;
-  }
-  body { margin:0; padding:0; font-family: Arial, Helvetica, sans-serif; color: var(--ink); -webkit-print-color-adjust: exact; background: var(--paper); }
-  .container { max-width: 800px; margin: 100px auto; padding: 0 40px; box-sizing: border-box; }
-  .header { position: relative; margin-bottom: 50px; }
-  .header::after { content: ""; position:absolute; left:0; right:0; bottom:-16px; height:3px; background: linear-gradient(90deg, var(--brand-a), var(--brand-b)); border-radius: 2px; }
-  .brand { display:flex; align-items:center; gap:12px; }
-  .brand-title { font-weight:700; font-size:16px; }
-  .brand-sub { font-size:12px; color: var(--muted); }
-  .title { font-size:26px; font-weight:700; letter-spacing:.5px; }
-  .muted { color: var(--muted-2); }
-  .items { width:100%; border-collapse: collapse; font-size:13px; margin-bottom:25px; }
-  .items thead th { text-align:left; padding:10px 8px; color:#fff; background: linear-gradient(90deg, var(--brand-a), var(--brand-b)); }
-  .items tbody td { padding:12px 8px; border-bottom:1px solid var(--line); }
-  .items tbody tr:nth-child(odd) td { background: rgba(2, 132, 199, 0.03); }
-  .right { text-align:right; }
-  .totals-card { width:260px; font-size:13px; background: rgba(255,255,255,.88); border:1px solid var(--line); border-radius:12px; box-shadow: 0 6px 18px rgba(15,23,42,0.06); padding: 10px 12px; }
-  .totals-card .row { display:flex; justify-content:space-between; padding:6px 0; }
-  .totals-card .grand { display:flex; justify-content:space-between; padding:12px 0; margin-top:6px; border-top:1px solid var(--line); font-weight:700; font-size:15px; }
-  @media print { .container { margin: 60px auto; } }
+  body { margin:0; padding:0; font-family: Arial, Helvetica, sans-serif; color:#0f172a; -webkit-print-color-adjust:exact; background:#ffffff; }
+  .container { max-width:800px; margin:100px auto; padding:0 40px; box-sizing:border-box; }
+  .items { width:100%; border-collapse:collapse; font-size:13px; margin-bottom:25px; }
+  .items thead th { text-align:left; padding:10px 8px; color:#fff; background:linear-gradient(90deg,#1f8ea6,#0b6b8a); }
+  .items tbody td { padding:12px 8px; border-bottom:1px solid #e2e8f0; }
+  .totals { display:flex; justify-content:flex-end; margin-top:10px; }
+  .totals .card { width:260px; font-size:13px; }
+  .totals .row { display:flex; justify-content:space-between; padding:5px 0; }
+  .totals .grand { display:flex; justify-content:space-between; padding:10px 0; border-top:1px solid #e2e8f0; margin-top:6px; font-weight:700; font-size:15px; }
 </style>
 </head>
 <body>
 
-<!-- Artistic Watercolor Background (inline SVG) -->
 <div style="position:fixed;inset:0;z-index:-2;pointer-events:none;">
   <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 900' preserveAspectRatio='none' style="width:100%;height:100%;">
     <defs>
@@ -154,10 +137,6 @@ function buildInvoiceHTML(invoiceData) {
         <stop offset='50%' stop-color='#b3e7f9' stop-opacity='0.45'/>
         <stop offset='100%' stop-color='#ffffff' stop-opacity='0'/>
       </radialGradient>
-      <filter id='paint' x='-20%' y='-20%' width='140%' height='140%'>
-        <feTurbulence baseFrequency='0.005' numOctaves='3' seed='2'/>
-        <feGaussianBlur stdDeviation='30'/>
-      </filter>
     </defs>
     <rect width='1200' height='900' fill='url(#g1)'/>
     <rect width='1200' height='900' fill='url(#g2)'/>
@@ -166,32 +145,27 @@ function buildInvoiceHTML(invoiceData) {
       <path d='M0,100 C280,40 520,60 720,120 C860,160 980,180 1200,120 L1200,0 L0,0 Z' fill='#d6f0ff'/>
     </g>
   </svg>
- </div>
+</div>
 
- <!-- Optional Faint Watermark -->
- <img src="https://via.placeholder.com/900x200?text=ALO+Solutions+Watermark" alt="" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%) rotate(-8deg);opacity:0.05;width:70%;max-width:900px;z-index:-1;">
+<img src="https://via.placeholder.com/900x200?text=${encodeURIComponent(companyName)}+Watermark" alt="" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%) rotate(-8deg);opacity:0.05;width:70%;max-width:900px;z-index:-1;">
 
- <!-- Invoice Content -->
- <div class="container">
-
-  <!-- Header -->
-  <div class="header" style="display:flex;justify-content:space-between;align-items:flex-start;">
-    <div class="brand">
-      <img src="https://via.placeholder.com/300x90?text=ALO+Solutions+Logo" alt="ALO Solutions Logo" style="width:160px;height:auto;">
+<div class="container">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:50px;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <img src="${logoUrl}" alt="${companyName} Logo" style="width:160px;height:auto;">
       <div>
-        <div class="brand-title">ALO Solutions Pvt Ltd</div>
-        <div class="brand-sub">123 Business Street, Colombo, Sri Lanka<br>+94 77 123 4567</div>
+        <div style="font-weight:700;font-size:16px;">${companyName}</div>
+        <div style="font-size:12px;color:#475569;">${companyAddress || ''}</div>
       </div>
     </div>
     <div style="text-align:right;">
-      <div class="title">${heading}</div>
+      <div style="font-size:26px;font-weight:700;letter-spacing:0.5px;">${heading}</div>
       <div style="font-size:13px;margin-top:6px;">Invoice #: <strong>${invoiceNo}</strong></div>
       <div style="font-size:13px;">Date: <strong>${issue}</strong></div>
       <div style="font-size:13px;">Due: <strong>${due}</strong></div>
     </div>
   </div>
 
-  <!-- Billing -->
   <div style="display:flex;justify-content:space-between;font-size:13px;color:#23303d;margin-bottom:25px;">
     <div>
       <div style="font-weight:700;">Bill To</div>
@@ -208,15 +182,14 @@ function buildInvoiceHTML(invoiceData) {
     </div>
   </div>
 
-  <!-- Items -->
-  <table class="items" style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:25px;">
+  <table class="items">
     <thead>
       <tr>
-        <th style="text-align:left;padding:10px 8px;color:#fff;background:linear-gradient(90deg,#1f8ea6,#0b6b8a);">Description</th>
-        <th style="text-align:left;padding:10px 8px;color:#fff;background:linear-gradient(90deg,#1f8ea6,#0b6b8a);">Unit</th>
-        <th style="text-align:right;padding:10px 8px;color:#fff;background:linear-gradient(90deg,#1f8ea6,#0b6b8a);">Qty</th>
-        <th style="text-align:right;padding:10px 8px;color:#fff;background:linear-gradient(90deg,#1f8ea6,#0b6b8a);">Unit Price</th>
-        <th style="text-align:right;padding:10px 8px;color:#fff;background:linear-gradient(90deg,#1f8ea6,#0b6b8a);">Total</th>
+        <th>Description</th>
+        <th>Unit</th>
+        <th style="text-align:right;">Qty</th>
+        <th style="text-align:right;">Unit Price</th>
+        <th style="text-align:right;">Total</th>
       </tr>
     </thead>
     <tbody>
@@ -224,9 +197,8 @@ function buildInvoiceHTML(invoiceData) {
     </tbody>
   </table>
 
-  <!-- Totals -->
-  <div style="display:flex;justify-content:flex-end;margin-top:10px;">
-    <div class="totals-card">
+  <div class="totals">
+    <div class="card">
       <div class="row"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
       <div class="row"><span>Tax (${taxRateDisplay}%)</span><span>${fmt(gst)}</span></div>
       ${depositPaid > 0 ? `<div class="row"><span>Deposit Paid</span><span>- ${fmt(depositPaid)}</span></div>` : ''}
@@ -234,7 +206,6 @@ function buildInvoiceHTML(invoiceData) {
     </div>
   </div>
 
-  <!-- Footer -->
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-top:50px;font-size:12px;color:#475569;">
     <div>
       <div style="font-weight:700;margin-bottom:6px;">Notes & Terms</div>
@@ -242,12 +213,12 @@ function buildInvoiceHTML(invoiceData) {
     </div>
     <div style="text-align:right;">
       <div>Authorized by</div>
-      <div style="font-weight:700;margin-top:15px;color:#0f172a;">Jane Doe</div>
-      <div>Director, ALO Solutions</div>
+      <div style="font-weight:700;margin-top:15px;color:#0f172a;">${invoiceData.authorizedBy || 'Authorized Officer'}</div>
+      <div>${companyName}</div>
     </div>
   </div>
 
- </div>
+</div>
 
 </body>
 </html>`;
@@ -912,6 +883,7 @@ router.post('/', verifyToken, async (req, res) => {
     const invoiceData = {
       invoiceNumber: generateInvoiceNumber(),
       bookingId: bookingId,
+      bookingCode: bookingData.bookingCode || null,
       invoiceType: invoiceType,
       customer: {
         name: bookingData.customerName,
@@ -1059,14 +1031,16 @@ router.get('/hall-owner/:hallOwnerId', verifyToken, async (req, res) => {
       // Fetch booking source from associated booking if bookingId exists
       let bookingSource = data.bookingSource;
       let quotationId = data.quotationId;
+      let bookingCode = data.bookingCode;
       
-      if (data.bookingId && !bookingSource) {
+      if (data.bookingId && (!bookingSource || !bookingCode)) {
         try {
           const bookingDoc = await admin.firestore().collection('bookings').doc(data.bookingId).get();
           if (bookingDoc.exists) {
             const bookingData = bookingDoc.data();
             bookingSource = bookingData.bookingSource;
             quotationId = bookingData.quotationId;
+            bookingCode = bookingData.bookingCode || bookingCode;
           }
         } catch (error) {
           console.error('Error fetching booking data for invoice:', error);
@@ -1078,6 +1052,7 @@ router.get('/hall-owner/:hallOwnerId', verifyToken, async (req, res) => {
         ...data,
         bookingSource: bookingSource || 'direct',
         quotationId: quotationId,
+        bookingCode: bookingCode || null,
         issueDate: data.issueDate?.toDate?.() || null,
         dueDate: data.dueDate?.toDate?.() || null,
         sentAt: data.sentAt?.toDate?.() || null,
@@ -1397,6 +1372,17 @@ router.get('/:id', verifyToken, async (req, res) => {
       ...invoiceData,
       bookingSource: bookingSource || 'direct',
       quotationId: quotationId,
+      bookingCode: invoiceData.bookingCode || (await (async () => {
+        try {
+          if (invoiceData.bookingId) {
+            const bookingDoc = await admin.firestore().collection('bookings').doc(invoiceData.bookingId).get();
+            return bookingDoc.exists ? (bookingDoc.data().bookingCode || null) : null;
+          }
+          return null;
+        } catch (_) {
+          return null;
+        }
+      })()),
       issueDate: invoiceData.issueDate?.toDate?.() || null,
       dueDate: invoiceData.dueDate?.toDate?.() || null,
       sentAt: invoiceData.sentAt?.toDate?.() || null,
