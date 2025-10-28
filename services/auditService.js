@@ -769,6 +769,54 @@ class AuditService {
     });
   }
 
+  /**
+   * Log when a booking's deposit paid status is toggled
+   */
+  static async logBookingDepositStatusChanged(userId, userEmail, userRole, booking, wasPaid, isPaid, amount, ipAddress, hallId) {
+    const action = isPaid ? 'deposit_marked_paid' : 'deposit_marked_unpaid';
+    const bookingId = booking?.id || booking?.bookingId;
+    const bookingCode = booking?.bookingCode;
+    const targetLabel = bookingCode ? `Booking ${bookingCode}` : `Booking ID: ${bookingId}`;
+    await this.logEvent({
+      userId,
+      userEmail,
+      userRole,
+      action,
+      targetType: 'booking',
+      target: targetLabel,
+      changes: {
+        deposit_paid: { old: Boolean(wasPaid), new: Boolean(isPaid) },
+        deposit_amount: amount
+      },
+      ipAddress,
+      hallId,
+      additionalInfo: `${isPaid ? 'Marked' : 'Unmarked'} deposit ${isPaid ? 'paid' : 'unpaid'} for ${targetLabel} (amount $${Number(amount || 0).toFixed(2)})`
+    });
+  }
+
+  /**
+   * Log when a quotation's deposit paid status is toggled
+   */
+  static async logQuotationDepositStatusChanged(userId, userEmail, userRole, quotation, wasPaid, isPaid, amount, ipAddress, hallId) {
+    const action = isPaid ? 'deposit_marked_paid' : 'deposit_marked_unpaid';
+    const quotationId = quotation?.id || quotation?.quotationId;
+    await this.logEvent({
+      userId,
+      userEmail,
+      userRole,
+      action,
+      targetType: 'quotation',
+      target: `Quotation ID: ${quotationId}`,
+      changes: {
+        deposit_paid: { old: Boolean(wasPaid), new: Boolean(isPaid) },
+        deposit_amount: amount
+      },
+      ipAddress,
+      hallId,
+      additionalInfo: `${isPaid ? 'Marked' : 'Unmarked'} deposit ${isPaid ? 'paid' : 'unpaid'} for quotation ${quotationId} (amount $${Number(amount || 0).toFixed(2)})`
+    });
+  }
+
   static async logProfilePictureUpdated(userId, userEmail, userRole, profilePictureUrl, ipAddress, hallId) {
     await this.logEvent({
       userId,

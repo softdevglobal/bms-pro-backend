@@ -303,6 +303,7 @@ class EmailService {
           ]);
 
           const methodsChips = [
+            methods?.stripe ? '<span style="display:inline-block;background:#e0f2fe;color:#075985;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Stripe</span>' : '',
             methods?.bankTransfer ? '<span style="display:inline-block;background:#eef2ff;color:#3730a3;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Bank Transfer</span>' : '',
             methods?.cash ? '<span style="display:inline-block;background:#ecfccb;color:#365314;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Cash</span>' : '',
             methods?.cheque ? '<span style="display:inline-block;background:#fffbeb;color:#92400e;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Cheque</span>' : ''
@@ -338,7 +339,7 @@ class EmailService {
               <p style="color: #059669; margin-bottom: 16px; font-weight: 600;">🎉 Your booking has been confirmed!</p>
               <a href="${data.stripePaymentUrl}" 
                  style="background-color: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
-                Pay Deposit Securely
+                Pay with Stripe
               </a>
               <div style="color:#64748b; font-size:12px; margin-top:8px;">This link will take you to our secure payment page.</div>
             </div>

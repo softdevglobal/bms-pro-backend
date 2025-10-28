@@ -547,7 +547,7 @@ router.get('/payment-methods', verifyToken, async (req, res) => {
       return res.status(404).json({ message: 'Hall owner not found' });
     }
     const data = targetDoc.data();
-    const defaults = { bankTransfer: true, cash: true, cheque: false };
+    const defaults = { stripe: false, bankTransfer: true, cash: true, cheque: false };
     const saved = data?.paymentMethods || {};
     res.json({ paymentMethods: { ...defaults, ...saved } });
   } catch (error) {
@@ -564,6 +564,10 @@ router.put('/payment-methods', verifyToken, async (req, res) => {
     const payload = req.body || {};
     const incoming = payload.paymentMethods || payload;
     const updates = {};
+    if (incoming.stripe !== undefined) {
+      if (typeof incoming.stripe !== 'boolean') return res.status(400).json({ message: 'stripe must be boolean' });
+      updates.stripe = incoming.stripe;
+    }
     if (incoming.bankTransfer !== undefined) {
       if (typeof incoming.bankTransfer !== 'boolean') return res.status(400).json({ message: 'bankTransfer must be boolean' });
       updates.bankTransfer = incoming.bankTransfer;

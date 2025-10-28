@@ -1189,6 +1189,33 @@ router.put('/:id', verifyToken, async (req, res) => {
       finalUpdateData.payment_details = paymentDetails;
     }
 
+    // If payment_details provided, audit deposit toggle
+    if (finalUpdateData.payment_details && typeof finalUpdateData.payment_details === 'object') {
+      try {
+        const prevPaid = Boolean(quotationData?.payment_details?.deposit_paid);
+        const nextPaid = Boolean(finalUpdateData.payment_details?.deposit_paid);
+        if (prevPaid !== nextPaid) {
+          const AuditService = require('../services/auditService');
+          const userEmail = (req.user && (req.user.email || req.user.user_email)) || '';
+          const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
+          const amount = Number(finalUpdateData.payment_details?.deposit_amount || quotationData?.payment_details?.deposit_amount || quotationData?.depositAmount || 0);
+          await AuditService.logQuotationDepositStatusChanged(
+            req.user.uid || req.user.user_id,
+            userEmail,
+            (await admin.firestore().collection('users').doc(req.user.uid || req.user.user_id).get()).data().role,
+            { id },
+            prevPaid,
+            nextPaid,
+            amount,
+            ipAddress,
+            quotationData.hallOwnerId
+          );
+        }
+      } catch (auditErr) {
+        console.error('Audit log for quotation deposit toggle failed (non-blocking):', auditErr?.message || auditErr);
+      }
+    }
+
     finalUpdateData.updatedAt = admin.firestore.FieldValue.serverTimestamp();
 
     // Update quotation
