@@ -144,15 +144,25 @@ router.get('/', verifyToken, checkAuditPermission, async (req, res) => {
 
     // Apply filters in memory
     if (startDate) {
-      const startDateObj = new Date(startDate);
-      auditLogs = auditLogs.filter(log => log.timestamp >= startDateObj);
+      // Interpret as local date start-of-day
+      const startDateObj = new Date(`${startDate}T00:00:00`);
+      auditLogs = auditLogs.filter(log => new Date(log.timestamp) >= startDateObj);
     }
     if (endDate) {
-      const endDateObj = new Date(endDate);
-      auditLogs = auditLogs.filter(log => log.timestamp <= endDateObj);
+      // Include entire end day by setting to 23:59:59
+      const endDateObj = new Date(`${endDate}T23:59:59`);
+      auditLogs = auditLogs.filter(log => new Date(log.timestamp) <= endDateObj);
     }
     if (action) {
-      auditLogs = auditLogs.filter(log => log.action === action);
+      // Support simple groups (create/update/delete) in addition to exact values
+      const a = String(action).toLowerCase();
+      const groupMap = {
+        create: ['user_created','booking_created','resource_created','customer_created','invoice_created','quotation_created'],
+        update: ['user_updated','booking_updated','resource_updated','customer_updated','settings_updated','pricing_updated','payment_updated','invoice_updated'],
+        delete: ['user_deleted','resource_deleted','payment_deleted']
+      };
+      const allowed = groupMap[a];
+      auditLogs = allowed ? auditLogs.filter(log => allowed.includes(log.action)) : auditLogs.filter(log => log.action === action);
     }
     if (userId) {
       auditLogs = auditLogs.filter(log => log.userId === userId);
@@ -161,7 +171,11 @@ router.get('/', verifyToken, checkAuditPermission, async (req, res) => {
       auditLogs = auditLogs.filter(log => log.targetType === targetType);
     }
     if (userRole) {
-      auditLogs = auditLogs.filter(log => log.userRole === userRole);
+      if (String(userRole).toLowerCase() === 'all') {
+        // no-op
+      } else {
+        auditLogs = auditLogs.filter(log => log.userRole === userRole);
+      }
     }
 
     // Apply sorting
