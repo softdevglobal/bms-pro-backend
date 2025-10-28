@@ -62,8 +62,198 @@ async function getHallOwnerLogoBuffer(hallOwnerId) {
   }
 }
 
-// Helper function to generate invoice PDF
-async function generateInvoicePDF(invoiceData) {
+// HTML-based PDF (Puppeteer) - build HTML string with artistic background
+function buildInvoiceHTML(invoiceData) {
+  const fmt = (n) => Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const toDate = (d) => d?.toDate?.() || (d instanceof Date ? d : null);
+  const issue = (toDate(invoiceData.issueDate) || new Date()).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' });
+  const due = (toDate(invoiceData.dueDate) || new Date()).toLocaleDateString('en-AU', { day: '2-digit', month: 'short', year: 'numeric' });
+  const invoiceNo = invoiceData.invoiceNumber || '';
+  const type = (invoiceData.invoiceType || 'INVOICE').toUpperCase();
+  const heading = type === 'FINAL' ? 'FINAL INVOICE' : `${type} INVOICE`;
+  const customerName = invoiceData.customer?.name || '';
+  const customerEmail = invoiceData.customer?.email || '';
+  const subtotal = Number(invoiceData.subtotal || 0);
+  const gst = Number(invoiceData.gst || 0);
+  const totalIncl = Number(invoiceData.total || 0);
+  const depositPaid = Number(invoiceData.depositPaid || 0);
+  const totalDue = Number((depositPaid > 0 && invoiceData.finalTotal) ? invoiceData.finalTotal : totalIncl);
+  const taxRate = Number(invoiceData.taxRate ?? 10);
+  const taxRateDisplay = Number.isInteger(taxRate) ? String(taxRate) : taxRate.toFixed(2).replace(/\.00$/, '');
+  const bookingRef = invoiceData.bookingCode || invoiceData.bookingId || '';
+  const companyName = invoiceData.hallOwnerName || 'Cranbourne Public Hall';
+  const companyAddress = invoiceData.hallOwnerAddress || '';
+  const logoUrl = invoiceData.hallOwnerLogoUrl || 'https://via.placeholder.com/300x90?text=Logo';
+
+  const items = Array.isArray(invoiceData.lineItems) && invoiceData.lineItems.length > 0
+    ? invoiceData.lineItems.map(li => ({
+        description: li.description || 'Item',
+        unit: li.unit || 'Service',
+        qty: Number(li.quantity || 1),
+        price: Number(li.unitPrice || 0),
+        total: Number((li.quantity || 1) * (li.unitPrice || 0))
+      }))
+    : [{ description: invoiceData.description || `${invoiceData.resource || 'Service'} — ${type} Payment`, unit: 'Service', qty: 1, price: totalIncl, total: totalIncl }];
+
+  const itemsRows = items.map(li => `
+      <tr>
+        <td style="padding:12px 8px;border-bottom:1px solid #e2e8f0;">${li.description}</td>
+        <td style="padding:12px 8px;border-bottom:1px solid #e2e8f0;">${li.unit}</td>
+        <td style="padding:12px 8px;text-align:right;border-bottom:1px solid #e2e8f0;">${Number.isInteger(li.qty) ? li.qty : fmt(li.qty)}</td>
+        <td style="padding:12px 8px;text-align:right;border-bottom:1px solid #e2e8f0;">${fmt(li.price)}</td>
+        <td style="padding:12px 8px;text-align:right;border-bottom:1px solid #e2e8f0;">${fmt(li.total)}</td>
+      </tr>`).join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>${heading} — ${companyName}</title>
+<style>
+  @page { size: A4; margin: 16mm 10mm; }
+  body { margin:0; padding:0; font-family: Arial, Helvetica, sans-serif; color:#0f172a; -webkit-print-color-adjust:exact; background:#ffffff; }
+  .container { max-width:800px; margin:100px auto; padding:0 40px; box-sizing:border-box; }
+  .items { width:100%; border-collapse:collapse; font-size:13px; margin-bottom:25px; }
+  .items thead th { text-align:left; padding:10px 8px; color:#fff; background:linear-gradient(90deg,#1f8ea6,#0b6b8a); }
+  .items tbody td { padding:12px 8px; border-bottom:1px solid #e2e8f0; }
+  .totals { display:flex; justify-content:flex-end; margin-top:10px; }
+  .totals .card { width:260px; font-size:13px; }
+  .totals .row { display:flex; justify-content:space-between; padding:5px 0; }
+  .totals .grand { display:flex; justify-content:space-between; padding:10px 0; border-top:1px solid #e2e8f0; margin-top:6px; font-weight:700; font-size:15px; }
+</style>
+</head>
+<body>
+
+<div style="position:fixed;inset:0;z-index:-2;pointer-events:none;">
+  <svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 900' preserveAspectRatio='none' style="width:100%;height:100%;">
+    <defs>
+      <radialGradient id='g1' cx='80%' cy='20%' r='70%'>
+        <stop offset='0%' stop-color='#ffeac1' stop-opacity='0.9'/>
+        <stop offset='50%' stop-color='#ffd7b2' stop-opacity='0.5'/>
+        <stop offset='100%' stop-color='#ffffff' stop-opacity='0'/>
+      </radialGradient>
+      <radialGradient id='g2' cx='10%' cy='80%' r='80%'>
+        <stop offset='0%' stop-color='#c8f3ff' stop-opacity='0.8'/>
+        <stop offset='50%' stop-color='#b3e7f9' stop-opacity='0.45'/>
+        <stop offset='100%' stop-color='#ffffff' stop-opacity='0'/>
+      </radialGradient>
+    </defs>
+    <rect width='1200' height='900' fill='url(#g1)'/>
+    <rect width='1200' height='900' fill='url(#g2)'/>
+    <g opacity='0.15'>
+      <path d='M0,300 C200,180 400,120 620,180 C840,240 980,260 1200,200 L1200,900 L0,900 Z' fill='#ffd6b3'/>
+      <path d='M0,100 C280,40 520,60 720,120 C860,160 980,180 1200,120 L1200,0 L0,0 Z' fill='#d6f0ff'/>
+    </g>
+  </svg>
+</div>
+
+<img src="https://via.placeholder.com/900x200?text=${encodeURIComponent(companyName)}+Watermark" alt="" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%) rotate(-8deg);opacity:0.05;width:70%;max-width:900px;z-index:-1;">
+
+<div class="container">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:50px;">
+    <div style="display:flex;align-items:center;gap:12px;">
+      <img src="${logoUrl}" alt="${companyName} Logo" style="width:160px;height:auto;">
+      <div>
+        <div style="font-weight:700;font-size:16px;">${companyName}</div>
+        <div style="font-size:12px;color:#475569;">${companyAddress || ''}</div>
+      </div>
+    </div>
+    <div style="text-align:right;">
+      <div style="font-size:26px;font-weight:700;letter-spacing:0.5px;">${heading}</div>
+      <div style="font-size:13px;margin-top:6px;">Invoice #: <strong>${invoiceNo}</strong></div>
+      <div style="font-size:13px;">Date: <strong>${issue}</strong></div>
+      <div style="font-size:13px;">Due: <strong>${due}</strong></div>
+    </div>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;font-size:13px;color:#23303d;margin-bottom:25px;">
+    <div>
+      <div style="font-weight:700;">Bill To</div>
+      <div>${customerName || 'Client'}</div>
+      <div style="font-size:12px;color:#5b6b75;">${customerEmail || ''}</div>
+    </div>
+    <div style="text-align:right;">
+      <div style="font-weight:700;">Booking Reference</div>
+      <div>${bookingRef}</div>
+      <div style="height:8px"></div>
+      <div style="font-weight:700;">Payment</div>
+      <div>Bank Transfer</div>
+      <div style="font-size:12px;color:#5b6b75;">Example Bank – IBAN: LK00 0000 0000 0000</div>
+    </div>
+  </div>
+
+  <table class="items">
+    <thead>
+      <tr>
+        <th>Description</th>
+        <th>Unit</th>
+        <th style="text-align:right;">Qty</th>
+        <th style="text-align:right;">Unit Price</th>
+        <th style="text-align:right;">Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${itemsRows}
+    </tbody>
+  </table>
+
+  <div class="totals">
+    <div class="card">
+      <div class="row"><span>Subtotal</span><span>${fmt(subtotal)}</span></div>
+      <div class="row"><span>Tax (${taxRateDisplay}%)</span><span>${fmt(gst)}</span></div>
+      ${depositPaid > 0 ? `<div class="row"><span>Deposit Paid</span><span>- ${fmt(depositPaid)}</span></div>` : ''}
+      <div class="grand"><span>Total Due</span><span>${fmt(totalDue)}</span></div>
+    </div>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-top:50px;font-size:12px;color:#475569;">
+    <div>
+      <div style="font-weight:700;margin-bottom:6px;">Notes & Terms</div>
+      <div>${invoiceData.notes || 'Thank you for your business. Payment due within 14 days. Please include invoice number when paying.'}</div>
+    </div>
+    <div style="text-align:right;">
+      <div>Authorized by</div>
+      <div style="font-weight:700;margin-top:15px;color:#0f172a;">${invoiceData.authorizedBy || 'Authorized Officer'}</div>
+      <div>${companyName}</div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>`;
+}
+
+async function tryGenerateHtmlPDF(invoiceData) {
+  try {
+    const puppeteer = require('puppeteer');
+    // Best-effort enrich with bookingCode for reference if not already present
+    if (!invoiceData.bookingCode && invoiceData.bookingId) {
+      try {
+        const admin = require('../firebaseAdmin');
+        const bookingDoc = await admin.firestore().collection('bookings').doc(invoiceData.bookingId).get();
+        if (bookingDoc.exists) {
+          const bookingData = bookingDoc.data();
+          if (bookingData.bookingCode) invoiceData.bookingCode = bookingData.bookingCode;
+        }
+      } catch (_e) {
+        // ignore enrichment errors; proceed without bookingCode
+      }
+    }
+    const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox','--disable-setuid-sandbox'] });
+    const page = await browser.newPage();
+    const html = buildInvoiceHTML(invoiceData);
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    const buffer = await page.pdf({ format: 'A4', printBackground: true, margin: { top: '16mm', bottom: '16mm', left: '10mm', right: '10mm' } });
+    await browser.close();
+    return buffer;
+  } catch (e) {
+    throw e;
+  }
+}
+
+// Helper function to generate invoice PDF with PDFKit (fallback)
+async function generateInvoicePDF_PDFKit(invoiceData) {
   // Fetch logo buffer before PDF generation (non-blocking if fails)
   const logoBuffer = await getHallOwnerLogoBuffer(invoiceData.hallOwnerId);
   return new Promise((resolve, reject) => {
@@ -87,10 +277,27 @@ async function generateInvoicePDF(invoiceData) {
       const accentColor = '#059669'; // Green
       const lightGray = '#f1f5f9';
       const darkGray = '#334155';
+      const pageWidth = doc.page.width;
+      const pageHeight = doc.page.height;
+      const margin = 40;
 
-      // Header with gradient-like effect
-      doc.rect(0, 0, 595, 120)
-         .fill(primaryColor);
+      // Helper: page background gradient
+      const drawPageBackground = () => {
+        const bg = doc.linearGradient(0, 0, pageWidth, pageHeight);
+        bg.stop(0, '#f8fafc');
+        bg.stop(1, '#eef2ff');
+        doc.rect(0, 0, pageWidth, pageHeight).fill(bg);
+      };
+      drawPageBackground();
+      doc.on('pageAdded', drawPageBackground);
+
+      // (Background handled above in HTML version; here minimal background is drawn via gradient header only)
+
+      // Header gradient strip
+      const headerGradient = doc.linearGradient(0, 0, 595, 120);
+      headerGradient.stop(0, primaryColor);
+      headerGradient.stop(1, '#4338ca');
+      doc.rect(0, 0, 595, 120).fill(headerGradient);
       
       // Company logo area (placeholder)
       doc.rect(40, 20, 60, 60)
@@ -118,8 +325,8 @@ async function generateInvoicePDF(invoiceData) {
          .font('Helvetica-Bold')
          .text('INVOICE', 50, 45, { width: 495, align: 'right' });
 
-      // Invoice details box
-      doc.rect(40, 140, 515, 80)
+      // Invoice banner card
+      doc.roundedRect(40, 140, 515, 80, 8)
          .fill(lightGray)
          .stroke(secondaryColor, 1);
       
@@ -135,7 +342,8 @@ async function generateInvoicePDF(invoiceData) {
          .text(`Issue Date: ${(invoiceData.issueDate?.toDate?.() || (invoiceData.issueDate instanceof Date ? invoiceData.issueDate : new Date())).toLocaleDateString('en-AU')}`
            , 50, 185)
          .text(`Due Date: ${(() => { const d = invoiceData.dueDate?.toDate?.() || (invoiceData.dueDate instanceof Date ? invoiceData.dueDate : null); return d ? d.toLocaleDateString('en-AU') : 'N/A'; })()}`
-           , 50, 200);
+           , 50, 200)
+         .text(`Booking Reference: ${invoiceData.bookingCode || invoiceData.bookingId || ''}`, 320, 170); // added booking reference
 
       // Customer details section
       doc.fillColor(primaryColor)
@@ -216,14 +424,38 @@ async function generateInvoicePDF(invoiceData) {
         }
       }
 
+      // Invoice summary cells
+      const summaryY = invoiceData.bookingSource === 'quotation' ? 440 : 370;
+      const cellWidth = Math.floor(505 / 4);
+      const cellLabels = ['Full Amount (incl. GST)', 'Deposit Paid', 'Final Due', 'Tax'];
+      const fullAmount = (invoiceData.fullAmountWithGST || invoiceData.total) || 0;
+      const depositAmount = Number(invoiceData.depositPaid || 0);
+      const finalDue = Number((invoiceData.depositPaid > 0 ? invoiceData.finalTotal : invoiceData.total) || 0);
+      const taxDisplay = `${invoiceData.taxType || 'Inclusive'} (${invoiceData.taxRate ?? 10}%)`;
+      const cellValues = [
+        `$${fullAmount.toFixed(2)} AUD`,
+        `$${depositAmount.toFixed(2)} AUD`,
+        `$${finalDue.toFixed(2)} AUD`,
+        taxDisplay
+      ];
+      for (let i = 0; i < 4; i++) {
+        const x = 50 + i * cellWidth;
+        doc.roundedRect(x, summaryY, cellWidth - (i === 3 ? 0 : 6), 60, 8)
+           .fill('#ffffff')
+           .stroke('#e2e8f0', 1);
+        doc.fillColor('#64748b').font('Helvetica').fontSize(8).text(cellLabels[i], x + 10, summaryY + 10, { width: cellWidth - 20, align: 'left' });
+        doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(12).text(cellValues[i], x + 10, summaryY + 26, { width: cellWidth - 20, align: 'left' });
+      }
+
       // Line items table
+      const itemsTitleY = summaryY + 80;
       doc.fillColor(primaryColor)
          .fontSize(14)
          .font('Helvetica-Bold')
-         .text('INVOICE ITEMS', 50, invoiceData.bookingSource === 'quotation' ? 450 : 380);
+         .text('INVOICE ITEMS', 50, itemsTitleY);
       
       // Table header
-      const tableStartY = invoiceData.bookingSource === 'quotation' ? 460 : 390;
+      const tableStartY = itemsTitleY + 10;
       doc.rect(50, tableStartY, 505, 25)
          .fill(primaryColor);
       
@@ -236,9 +468,9 @@ async function generateInvoicePDF(invoiceData) {
          .text('Amount', 500, tableStartY + 8, { width: 45, align: 'right' });
 
       // Table row
-      doc.rect(50, tableStartY + 25, 505, 30)
+      doc.roundedRect(50, tableStartY + 25, 505, 30, 6)
          .fill('#ffffff')
-         .stroke(secondaryColor, 1);
+         .stroke('#cbd5e1', 1);
       
       doc.fillColor(darkGray)
          .fontSize(10)
@@ -248,13 +480,13 @@ async function generateInvoicePDF(invoiceData) {
          .text(`$${invoiceData.subtotal.toFixed(2)}`, 400, tableStartY + 35)
          .text(`$${invoiceData.subtotal.toFixed(2)}`, 500, tableStartY + 35, { width: 45, align: 'right' });
 
-      // Totals section
+      // Totals section card
       let currentY = tableStartY + 70; // Position after table
-      const totalsHeight = invoiceData.depositPaid > 0 ? 100 : 80; // Extra space for deposit info
+      const totalsHeight = invoiceData.depositPaid > 0 ? 130 : 100; // Extra space for tax details
       
-      doc.rect(350, currentY, 205, totalsHeight)
+      doc.roundedRect(350, currentY, 205, totalsHeight, 8)
          .fill('#ffffff')
-         .stroke(secondaryColor, 1);
+         .stroke('#e2e8f0', 1);
       
       // Show different breakdown based on whether there's a deposit
       if (invoiceData.depositPaid > 0) {
@@ -273,8 +505,16 @@ async function generateInvoicePDF(invoiceData) {
            .fontSize(8)
            .font('Helvetica')
            .text(`Calculation: $${fullAmount.toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)}`, 360, currentY + 40, { width: 185, align: 'center' });
-        
-        currentY += 30; // Extra space for deposit line and calculation
+
+        // Tax details
+        doc.fillColor(darkGray)
+           .fontSize(10)
+           .font('Helvetica')
+           .text(`Tax Type: ${invoiceData.taxType || 'Inclusive'}`, 360, currentY + 55)
+           .text(`GST (${(invoiceData.taxRate ?? 10)}%):`, 360, currentY + 70)
+           .text(`$${(invoiceData.gst ?? 0).toFixed(2)}`, 500, currentY + 70, { width: 45, align: 'right' });
+
+        currentY += 50; // Extra space for deposit line, calculation, and tax details
       } else {
         // For invoices without deposits, show normal breakdown
         doc.fillColor(darkGray)
@@ -282,11 +522,13 @@ async function generateInvoicePDF(invoiceData) {
            .font('Helvetica')
            .text('Subtotal:', 360, currentY + 10)
            .text(`$${invoiceData.subtotal.toFixed(2)}`, 500, currentY + 10, { width: 45, align: 'right' })
-           .text('GST (10%):', 360, currentY + 25)
-           .text(`$${invoiceData.gst.toFixed(2)}`, 500, currentY + 25, { width: 45, align: 'right' });
+           .text(`GST (${(invoiceData.taxRate ?? 10)}%):`, 360, currentY + 25)
+           .text(`$${invoiceData.gst.toFixed(2)}`, 500, currentY + 25, { width: 45, align: 'right' })
+           .fontSize(10)
+           .text(`Tax Type: ${invoiceData.taxType || 'Inclusive'}`, 360, currentY + 40);
       }
       
-      doc.rect(350, currentY + 40, 205, 40)
+      doc.roundedRect(350, currentY + 40, 205, 40, 8)
          .fill(accentColor);
       
       doc.fillColor('#ffffff')
@@ -296,25 +538,42 @@ async function generateInvoicePDF(invoiceData) {
          .fontSize(20)
          .text(`$${invoiceData.finalTotal.toFixed(2)} AUD`, 360, currentY + 65, { width: 185, align: 'right' });
 
-      // Add calculation summary box
+      // Large FINAL DUE banner centered (ensure it stays on current page)
+      let bannerY = currentY + (invoiceData.depositPaid > 0 ? 90 : 70);
+      if (bannerY + 150 > pageHeight - margin) {
+        doc.addPage();
+        // new page background auto-drawn via pageAdded handler
+        bannerY = margin + 40;
+      }
+      const bannerGradient = doc.linearGradient(50, bannerY, 555, bannerY);
+      bannerGradient.stop(0, '#16a34a');
+      bannerGradient.stop(1, '#0ea5e9');
+      doc.roundedRect(50, bannerY, 505, 60, 12).fill(bannerGradient);
+      doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(14)
+         .text(invoiceData.depositPaid > 0 ? 'FINAL PAYMENT DUE' : 'TOTAL DUE', 60, bannerY + 10, { width: 485, align: 'center' });
+      doc.fontSize(24)
+         .text(`$${(invoiceData.finalTotal || invoiceData.total).toFixed(2)} AUD`, 60, bannerY + 28, { width: 485, align: 'center' });
+
+      // Calculation summary below banner (if deposit exists)
       if (invoiceData.depositPaid > 0) {
-        doc.rect(50, currentY + 100, 505, 40)
+        doc.roundedRect(50, bannerY + 70, 505, 34, 8)
            .fill('#f8fafc')
            .stroke('#e2e8f0', 1);
-        
-        doc.fillColor('#1e293b')
-           .fontSize(12)
-           .font('Helvetica-Bold')
-           .text('CALCULATION SUMMARY', 60, currentY + 115);
-        
-        doc.fillColor('#475569')
-           .fontSize(10)
-           .font('Helvetica')
-           .text(invoiceData.calculationBreakdown?.formula || `Final Payment = $${(invoiceData.fullAmountWithGST || invoiceData.total).toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)}`, 60, currentY + 130, { width: 485 });
+        doc.fillColor('#64748b').font('Helvetica').fontSize(9)
+           .text(
+             invoiceData.calculationBreakdown?.formula || `Final Payment = $${(invoiceData.fullAmountWithGST || invoiceData.total).toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)}`,
+             60,
+             bannerY + 82,
+             { width: 485, align: 'center' }
+           );
       }
 
       // Deposit information section (if applicable)
-      let paymentSectionY = invoiceData.depositPaid > 0 ? 600 : 560; // Adjust based on calculation summary
+      let paymentSectionY = (invoiceData.depositPaid > 0 ? (bannerY + 115) : (bannerY + 30));
+      if (paymentSectionY + 180 > pageHeight - margin) {
+        doc.addPage();
+        paymentSectionY = margin + 10;
+      }
       if (invoiceData.depositPaid > 0) {
         doc.fillColor(primaryColor)
            .fontSize(14)
@@ -340,7 +599,7 @@ async function generateInvoicePDF(invoiceData) {
           doc.text(`Percentage: ${invoiceData.depositInfo?.value}%`, 300, paymentSectionY + 35);
         }
         
-        paymentSectionY += 70; // Move payment section down
+        paymentSectionY += 80; // Move payment section down
       }
 
       // Payment information
@@ -349,9 +608,9 @@ async function generateInvoicePDF(invoiceData) {
          .font('Helvetica-Bold')
          .text('PAYMENT INFORMATION', 50, paymentSectionY);
       
-      doc.rect(50, paymentSectionY + 10, 505, 60)
+      doc.roundedRect(50, paymentSectionY + 10, 505, 60, 8)
          .fill('#ffffff')
-         .stroke(secondaryColor, 1);
+         .stroke('#e2e8f0', 1);
       
       doc.fillColor(secondaryColor)
          .fontSize(10)
@@ -369,9 +628,9 @@ async function generateInvoicePDF(invoiceData) {
            .font('Helvetica-Bold')
            .text('ADDITIONAL NOTES', 50, notesSectionY);
         
-        doc.rect(50, notesSectionY + 10, 505, 30)
+        doc.roundedRect(50, notesSectionY + 10, 505, 30, 8)
            .fill('#ffffff')
-           .stroke(secondaryColor, 1);
+           .stroke('#e2e8f0', 1);
         
         doc.fillColor(secondaryColor)
            .fontSize(9)
@@ -411,6 +670,16 @@ async function generateInvoicePDF(invoiceData) {
       reject(error);
     }
   });
+}
+
+// Wrapper: try HTML-based first, then fallback
+async function generateInvoicePDF(invoiceData) {
+  try {
+    return await tryGenerateHtmlPDF(invoiceData);
+  } catch (e) {
+    console.warn('HTML renderer unavailable, falling back to PDFKit:', e?.message || e);
+    return await generateInvoicePDF_PDFKit(invoiceData);
+  }
 }
 
 // POST /api/invoices - Create a new invoice from booking
@@ -503,6 +772,29 @@ router.post('/', verifyToken, async (req, res) => {
     let depositPaid = 0;
     let depositInfo = null;
     let fullAmountWithGST = subtotal; // This is the full booking amount with GST already included
+    // Resolve tax metadata for display
+    let taxType = 'Inclusive';
+    let taxRatePct = 10;
+    try {
+      const hoDoc = await admin.firestore().collection('users').doc(actualHallOwnerId).get();
+      const hallSettings = hoDoc?.data?.() ? hoDoc.data().settings : null;
+      if (hallSettings) {
+        if (typeof hallSettings.taxType === 'string' && ['Inclusive', 'Exclusive'].includes(hallSettings.taxType)) {
+          taxType = hallSettings.taxType;
+        }
+        if (Number.isFinite(Number(hallSettings.taxRate))) {
+          taxRatePct = Number(hallSettings.taxRate);
+        }
+      }
+    } catch (_) {
+      // best-effort
+    }
+    // Prefer explicit booking payment_details.tax if present
+    if (bookingData?.payment_details?.tax) {
+      const taxObj = bookingData.payment_details.tax;
+      if (typeof taxObj.tax_type === 'string') taxType = String(taxObj.tax_type);
+      if (Number.isFinite(Number(taxObj.gst))) gst = Number(taxObj.gst);
+    }
     
     console.log('Invoice creation - checking deposit info:', {
       invoiceType,
@@ -512,8 +804,8 @@ router.post('/', verifyToken, async (req, res) => {
       depositValue: bookingData.depositValue
     });
     
-    // Apply deposit deduction on FINAL invoices whenever booking has a deposit, regardless of source
-    if (invoiceType === 'FINAL' && bookingData.depositType && bookingData.depositType !== 'None') {
+    // Apply deposit deduction on FINAL invoices whenever booking has a deposit (either legacy fields or unified payment_details)
+    if (invoiceType === 'FINAL' && ((bookingData.depositType && bookingData.depositType !== 'None') || (bookingData.payment_details && Number(bookingData.payment_details.deposit_amount) > 0))) {
       // Get the full quoted total (already includes GST)
       const fullQuotedTotal = req.body.fullQuotedTotal || bookingData.calculatedPrice || bookingData.totalAmount;
       if (fullQuotedTotal && !Number.isNaN(Number(fullQuotedTotal))) {
@@ -527,12 +819,21 @@ router.post('/', verifyToken, async (req, res) => {
       const baseAmount = fullAmountWithGST / 1.1; // Remove GST to get base amount
       gst = fullAmountWithGST - baseAmount; // Calculate GST amount
       
-      depositPaid = req.body.depositAmount !== undefined ? parseFloat(req.body.depositAmount) : (bookingData.depositAmount || 0);
+      // Prefer unified payment_details.deposit_amount when present
+      depositPaid = req.body.depositAmount !== undefined
+        ? parseFloat(req.body.depositAmount)
+        : (Number(bookingData.payment_details?.deposit_amount) || bookingData.depositAmount || 0);
       finalTotal = total - depositPaid;
       
+      // Ensure no undefined values are saved to Firestore (use null instead)
+      const resolvedDepositType = req.body.depositType || bookingData.payment_details?.deposit_type || bookingData.depositType || 'Fixed';
+      const resolvedDepositValue = (req.body.depositValue !== undefined)
+        ? req.body.depositValue
+        : (bookingData.depositValue !== undefined ? bookingData.depositValue : null);
+
       depositInfo = {
-        type: req.body.depositType || bookingData.depositType,
-        value: req.body.depositValue !== undefined ? req.body.depositValue : bookingData.depositValue,
+        type: resolvedDepositType,
+        value: resolvedDepositValue,
         amount: depositPaid
       };
       
@@ -547,7 +848,7 @@ router.post('/', verifyToken, async (req, res) => {
     } else if (invoiceType === 'DEPOSIT' && bookingData.depositType && bookingData.depositType !== 'None') {
       // For deposit invoices, the amount already includes GST
       // Calculate GST from the deposit amount
-      const baseAmount = subtotal / 1.1; // Remove GST to get base amount
+      const baseAmount = subtotal / (1 + (taxRatePct / 100)); // Remove GST to get base amount
       gst = subtotal - baseAmount; // Calculate GST amount
       
       const expectedDepositAmount = bookingData.depositAmount || 0;
@@ -566,7 +867,7 @@ router.post('/', verifyToken, async (req, res) => {
       });
     } else {
       // For other invoice types, calculate GST normally
-      const baseAmount = subtotal / 1.1; // Remove GST to get base amount
+      const baseAmount = subtotal / (1 + (taxRatePct / 100)); // Remove GST to get base amount
       gst = subtotal - baseAmount; // Calculate GST amount
       total = subtotal;
       
@@ -582,6 +883,7 @@ router.post('/', verifyToken, async (req, res) => {
     const invoiceData = {
       invoiceNumber: generateInvoiceNumber(),
       bookingId: bookingId,
+      bookingCode: bookingData.bookingCode || null,
       invoiceType: invoiceType,
       customer: {
         name: bookingData.customerName,
@@ -598,6 +900,8 @@ router.post('/', verifyToken, async (req, res) => {
       subtotal: subtotal,
       gst: gst,
       total: total,
+      taxType: taxType,
+      taxRate: taxRatePct,
       fullAmountWithGST: fullAmountWithGST, // Full booking amount with GST included
       finalTotal: finalTotal, // Final amount after deposit deduction
       depositPaid: depositPaid, // Amount already paid as deposit
@@ -727,14 +1031,16 @@ router.get('/hall-owner/:hallOwnerId', verifyToken, async (req, res) => {
       // Fetch booking source from associated booking if bookingId exists
       let bookingSource = data.bookingSource;
       let quotationId = data.quotationId;
+      let bookingCode = data.bookingCode;
       
-      if (data.bookingId && !bookingSource) {
+      if (data.bookingId && (!bookingSource || !bookingCode)) {
         try {
           const bookingDoc = await admin.firestore().collection('bookings').doc(data.bookingId).get();
           if (bookingDoc.exists) {
             const bookingData = bookingDoc.data();
             bookingSource = bookingData.bookingSource;
             quotationId = bookingData.quotationId;
+            bookingCode = bookingData.bookingCode || bookingCode;
           }
         } catch (error) {
           console.error('Error fetching booking data for invoice:', error);
@@ -746,6 +1052,7 @@ router.get('/hall-owner/:hallOwnerId', verifyToken, async (req, res) => {
         ...data,
         bookingSource: bookingSource || 'direct',
         quotationId: quotationId,
+        bookingCode: bookingCode || null,
         issueDate: data.issueDate?.toDate?.() || null,
         dueDate: data.dueDate?.toDate?.() || null,
         sentAt: data.sentAt?.toDate?.() || null,
@@ -1065,6 +1372,17 @@ router.get('/:id', verifyToken, async (req, res) => {
       ...invoiceData,
       bookingSource: bookingSource || 'direct',
       quotationId: quotationId,
+      bookingCode: invoiceData.bookingCode || (await (async () => {
+        try {
+          if (invoiceData.bookingId) {
+            const bookingDoc = await admin.firestore().collection('bookings').doc(invoiceData.bookingId).get();
+            return bookingDoc.exists ? (bookingDoc.data().bookingCode || null) : null;
+          }
+          return null;
+        } catch (_) {
+          return null;
+        }
+      })()),
       issueDate: invoiceData.issueDate?.toDate?.() || null,
       dueDate: invoiceData.dueDate?.toDate?.() || null,
       sentAt: invoiceData.sentAt?.toDate?.() || null,

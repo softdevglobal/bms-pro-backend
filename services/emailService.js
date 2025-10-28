@@ -40,6 +40,40 @@ class EmailService {
     }
   }
 
+  // Fetch hall owner's accepted payment methods with sensible defaults
+  async getHallOwnerPaymentMethods(hallOwnerId) {
+    try {
+      if (!hallOwnerId) {
+        return { bankTransfer: true, cash: true, cheque: false };
+      }
+      const userDoc = await admin.firestore().collection('users').doc(hallOwnerId).get();
+      if (!userDoc.exists) {
+        return { bankTransfer: true, cash: true, cheque: false };
+      }
+      const data = userDoc.data() || {};
+      const saved = data.paymentMethods || {};
+      const defaults = { bankTransfer: true, cash: true, cheque: false };
+      return { ...defaults, ...saved };
+    } catch (error) {
+      console.warn('Error fetching hall owner payment methods:', error?.message || error);
+      return { bankTransfer: true, cash: true, cheque: false };
+    }
+  }
+
+  // Fetch hall owner's bank transfer details if configured
+  async getHallOwnerBankDetails(hallOwnerId) {
+    try {
+      if (!hallOwnerId) return null;
+      const userDoc = await admin.firestore().collection('users').doc(hallOwnerId).get();
+      if (!userDoc.exists) return null;
+      const data = userDoc.data() || {};
+      return data.bankDetails || null;
+    } catch (error) {
+      console.warn('Error fetching hall owner bank details:', error?.message || error);
+      return null;
+    }
+  }
+
   // Safely normalize Firestore Timestamp, Date, ISO string, or epoch to Date
   normalizeDate(dateLike) {
     try {
@@ -129,6 +163,8 @@ class EmailService {
     
     let actionButton = '';
     let bookingDetails = '';
+    let paymentBreakdown = '';
+    let paymentInformation = '';
     
     // Add booking details if available
     if (data && data.bookingId) {
@@ -215,15 +251,110 @@ class EmailService {
         `;
         break;
       case 'booking_confirmed':
-        actionButton = `
-          <div style="text-align: center; margin: 30px 0;">
-            <p style="color: #059669; margin-bottom: 20px;">🎉 Your booking has been confirmed!</p>
-            <a href="https://cranbourne-public-hall.vercel.app/booknow" 
-               style="background-color: #059669; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
-              View Booking Details
-            </a>
-          </div>
-        `;
+        // Build payment breakdown if payment details provided
+        if (data) {
+          const totalAmount = Number(data.totalAmount ?? 0);
+          const depositAmount = Number(data.depositAmount ?? 0);
+          const finalDue = Number(data.finalDue ?? Math.max(0, (totalAmount - depositAmount)));
+          const taxAmount = Number(data.taxAmount ?? 0);
+          const gstRatePct = Number.isFinite(Number(data.gst)) ? Number(data.gst) : 10;
+          const taxType = data.taxType || 'Inclusive';
+          const subtotal = Math.max(0, Math.round(((totalAmount || 0) - (taxAmount || 0)) * 100) / 100);
+
+          paymentBreakdown = `
+            <div style="background-color: #f8fafc; border-radius: 8px; padding: 25px; margin: 10px 0 25px 0;">
+              <h3 style="color: #1e293b; margin: 0 0 16px 0; font-size: 18px; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px;">💳 Payment Breakdown</h3>
+              <table style="width: 100%; border-collapse: collapse;">
+                ${totalAmount ? `
+                <tr>
+                  <td style="padding: 10px 8px; color: #64748b; font-weight: 600;">Subtotal:</td>
+                  <td style="padding: 10px 8px; color: #1e293b; text-align: right;">$${subtotal.toFixed(2)} AUD</td>
+                </tr>
+                <tr>
+                  <td style="padding: 10px 8px; color: #64748b; font-weight: 600;">GST (${gstRatePct}%):</td>
+                  <td style="padding: 10px 8px; color: #1e293b; text-align: right;">$${taxAmount.toFixed(2)} AUD</td>
+                </tr>
+                <tr>
+                  <td style="padding: 12px 8px; color: #334155; font-weight: 700;">Total (incl. GST):</td>
+                  <td style="padding: 12px 8px; color: #059669; font-weight: 800; text-align: right;">$${totalAmount.toFixed(2)} AUD</td>
+                </tr>` : ''}
+                ${depositAmount ? `
+                <tr style="background-color: #dbeafe; border-top: 2px solid #3b82f6; border-bottom: 2px solid #3b82f6;">
+                  <td style="padding: 12px 8px; color: #1e40af; font-weight: 800;">💰 Deposit (pay first):</td>
+                  <td style="padding: 12px 8px; color: #1e40af; font-weight: 800; text-align: right;">-$${depositAmount.toFixed(2)} AUD</td>
+                </tr>` : ''}
+                <tr style="background-color: #dcfce7;">
+                  <td style="padding: 12px 8px; color: #166534; font-weight: 800;">Final Payment Due:</td>
+                  <td style="padding: 12px 8px; color: #166534; font-weight: 800; text-align: right;">$${finalDue.toFixed(2)} AUD</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 8px; color: #64748b; font-weight: 600;">Tax Type:</td>
+                  <td style="padding: 8px 8px; color: #1e293b; text-align: right;">${taxType}</td>
+                </tr>
+              </table>
+            </div>
+          `;
+        }
+        // Add payment methods and bank details (if configured for the hall owner)
+        try {
+          const [methods, bank] = await Promise.all([
+            this.getHallOwnerPaymentMethods(hallOwnerId),
+            this.getHallOwnerBankDetails(hallOwnerId)
+          ]);
+
+          const methodsChips = [
+            methods?.stripe ? '<span style="display:inline-block;background:#e0f2fe;color:#075985;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Stripe</span>' : '',
+            methods?.bankTransfer ? '<span style="display:inline-block;background:#eef2ff;color:#3730a3;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Bank Transfer</span>' : '',
+            methods?.cash ? '<span style="display:inline-block;background:#ecfccb;color:#365314;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Cash</span>' : '',
+            methods?.cheque ? '<span style="display:inline-block;background:#fffbeb;color:#92400e;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Cheque</span>' : ''
+          ].join('');
+
+          const bankHtml = (methods?.bankTransfer && bank)
+            ? `
+              <div style="background-color:#fff7ed;border:1px solid #fdba74;border-radius:8px;padding:16px;margin-top:12px;">
+                <div style="color:#9a3412;font-weight:800;margin-bottom:8px;">Bank Transfer Details</div>
+                <table style="width:100%;border-collapse:collapse;">
+                  ${bank.accountName ? `<tr><td style="padding:6px 0;color:#92400e;font-weight:600;">Account Name:</td><td style="padding:6px 0;color:#7c2d12;text-align:right;">${bank.accountName}</td></tr>` : ''}
+                  ${bank.bankName ? `<tr><td style="padding:6px 0;color:#92400e;font-weight:600;">Bank:</td><td style="padding:6px 0;color:#7c2d12;text-align:right;">${bank.bankName}</td></tr>` : ''}
+                  ${bank.bsb ? `<tr><td style="padding:6px 0;color:#92400e;font-weight:600;">BSB:</td><td style="padding:6px 0;color:#7c2d12;text-align:right;">${bank.bsb}</td></tr>` : ''}
+                  ${bank.accountNumber ? `<tr><td style="padding:6px 0;color:#92400e;font-weight:600;">Account Number:</td><td style="padding:6px 0;color:#7c2d12;text-align:right;">${bank.accountNumber}</td></tr>` : ''}
+                </table>
+                ${(data?.bookingCode || bank.referenceNote) ? `<div style="margin-top:8px;color:#9a3412;font-size:12px;">Reference: <strong>${bank.referenceNote || 'Please use your booking reference'}</strong>${data?.bookingCode ? ` (<span style="font-family:monospace;">${data.bookingCode}</span>)` : ''}</div>` : ''}
+              </div>
+            ` : '';
+
+          paymentInformation = `
+            <div style="background-color:#f8fafc;border-radius:8px;padding:20px;margin:10px 0 25px 0;border:1px solid #e2e8f0;">
+              <h3 style="color:#1e293b;margin:0 0 12px 0;font-size:18px;">Accepted Payment Methods</h3>
+              <div>${methodsChips || '<span style="color:#64748b;font-size:14px;">Payment methods will be sent with your invoice.</span>'}</div>
+              ${bankHtml}
+            </div>
+          `;
+        } catch (_) {
+          // ignore payment info errors
+        }
+        if (data?.stripePaymentUrl) {
+          actionButton = `
+            <div style="text-align: center; margin: 30px 0;">
+              <p style="color: #059669; margin-bottom: 16px; font-weight: 600;">🎉 Your booking has been confirmed!</p>
+              <a href="${data.stripePaymentUrl}" 
+                 style="background-color: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
+                Pay with Stripe
+              </a>
+              <div style="color:#64748b; font-size:12px; margin-top:8px;">This link will take you to our secure payment page.</div>
+            </div>
+          `;
+        } else {
+          actionButton = `
+            <div style="text-align: center; margin: 30px 0;">
+              <p style="color: #059669; margin-bottom: 20px;">🎉 Your booking has been confirmed!</p>
+              <a href="https://cranbourne-public-hall.vercel.app/booknow" 
+                 style="background-color: #059669; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
+                View Booking Details
+              </a>
+            </div>
+          `;
+        }
         break;
       case 'booking_cancelled':
         actionButton = `
@@ -273,6 +404,8 @@ class EmailService {
             </div>
             
             ${bookingDetails}
+            ${paymentBreakdown}
+            ${paymentInformation}
             ${actionButton}
             
             <div style="border-top: 1px solid #e2e8f0; margin-top: 40px; padding-top: 30px; text-align: center;">
@@ -666,6 +799,18 @@ class EmailService {
     // Fetch company logo
     const logoUrl = await this.getHallOwnerLogo(hallOwnerId);
 
+    // Fetch accepted payment methods and bank details for this hall owner
+    let paymentMethods = { bankTransfer: true, cash: true, cheque: false };
+    let bankDetails = null;
+    try {
+      [paymentMethods, bankDetails] = await Promise.all([
+        this.getHallOwnerPaymentMethods(hallOwnerId),
+        this.getHallOwnerBankDetails(hallOwnerId)
+      ]);
+    } catch (_) {
+      // best-effort only
+    }
+
     // Compute normalized amounts using provided taxType/taxRate with safe defaults
     const ratePct = Number.isFinite(Number(taxRate)) ? Number(taxRate) : 10;
     const rate = ratePct / 100;
@@ -687,6 +832,26 @@ class EmailService {
       return Number(depositAmount || 0) || 0;
     })();
     const finalDue = Math.max(0, Math.round((totalInclGst - depAmt) * 100) / 100);
+
+    const methodsChips = [
+      paymentMethods?.bankTransfer ? '<span style="display:inline-block;background:#eef2ff;color:#3730a3;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Bank Transfer</span>' : '',
+      paymentMethods?.cash ? '<span style="display:inline-block;background:#ecfccb;color:#365314;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Cash</span>' : '',
+      paymentMethods?.cheque ? '<span style="display:inline-block;background:#fffbeb;color:#92400e;padding:6px 10px;border-radius:9999px;font-size:12px;font-weight:600;margin-right:6px;">Cheque</span>' : ''
+    ].join('');
+
+    const bankHtml = (paymentMethods?.bankTransfer && bankDetails)
+      ? `
+        <div style="background-color:#fff7ed;border:1px solid #fdba74;border-radius:8px;padding:16px;margin-top:12px;">
+          <div style="color:#9a3412;font-weight:800;margin-bottom:8px;">Bank Transfer Details</div>
+          <table style="width:100%;border-collapse:collapse;">
+            ${bankDetails.accountName ? `<tr><td style=\"padding:6px 0;color:#92400e;font-weight:600;\">Account Name:</td><td style=\"padding:6px 0;color:#7c2d12;text-align:right;\">${bankDetails.accountName}</td></tr>` : ''}
+            ${bankDetails.bankName ? `<tr><td style=\"padding:6px 0;color:#92400e;font-weight:600;\">Bank:</td><td style=\"padding:6px 0;color:#7c2d12;text-align:right;\">${bankDetails.bankName}</td></tr>` : ''}
+            ${bankDetails.bsb ? `<tr><td style=\"padding:6px 0;color:#92400e;font-weight:600;\">BSB:</td><td style=\"padding:6px 0;color:#7c2d12;text-align:right;\">${bankDetails.bsb}</td></tr>` : ''}
+            ${bankDetails.accountNumber ? `<tr><td style=\"padding:6px 0;color:#92400e;font-weight:600;\">Account Number:</td><td style=\"padding:6px 0;color:#7c2d12;text-align:right;\">${bankDetails.accountNumber}</td></tr>` : ''}
+          </table>
+          ${(bookingId || bankDetails.referenceNote) ? `<div style=\"margin-top:8px;color:#9a3412;font-size:12px;\">Reference: <strong>${bankDetails.referenceNote || 'Please use your booking reference'}</strong>${bookingId ? ` (<span style=\"font-family:monospace;\">${bookingId}</span>)` : ''}</div>` : ''}
+        </div>
+      ` : '';
 
     return `
       <!DOCTYPE html>
@@ -802,11 +967,18 @@ class EmailService {
                 📝 Additional Notes
               </h3>
               <p style="color: #0c4a6e; margin: 0; line-height: 1.6;">
-                ${notes}
+            ${notes}
               </p>
             </div>
             ` : ''}
             
+          <!-- Payment Methods -->
+          <div style="background-color: #f8fafc; border-radius: 8px; padding: 20px; margin-bottom: 25px; border: 1px solid #e2e8f0;">
+            <h3 style="color: #1e293b; margin: 0 0 12px 0; font-size: 16px;">Accepted Payment Methods</h3>
+            <div>${methodsChips || '<span style="color:#64748b;font-size:14px;">Payment methods will be sent with your invoice.</span>'}</div>
+            ${bankHtml}
+          </div>
+
             <!-- Next Steps -->
             <div style="background-color: #eff6ff; border: 1px solid #3b82f6; border-radius: 8px; padding: 20px; margin-bottom: 25px;">
               <h3 style="color: #15803d; margin: 0 0 15px 0; font-size: 16px;">
@@ -1031,11 +1203,13 @@ class EmailService {
       }
       
       // Add deposit and final price information
+      const gstRatePct = Number.isFinite(Number(invoiceData.taxRate)) ? Number(invoiceData.taxRate) : 10;
+      const taxType = invoiceData.taxType || 'Inclusive';
       if (invoiceData.depositPaid > 0) {
         const fullAmount = invoiceData.fullAmountWithGST || invoiceData.total;
-        message += `\n\n💰 PAYMENT BREAKDOWN:\n- Full Amount (with GST): $${fullAmount.toFixed(2)} AUD\n- 💰 Deposit Already Paid: $${invoiceData.depositPaid.toFixed(2)} AUD\n\n💳 FINAL PAYMENT DUE: $${invoiceData.finalTotal.toFixed(2)} AUD\n\nCalculation: $${fullAmount.toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)} AUD`;
+        message += `\n\n💰 PAYMENT BREAKDOWN:\n- Tax Type: ${taxType}\n- GST (${gstRatePct}%): $${(invoiceData.gst ?? 0).toFixed(2)} AUD\n- Full Amount (with GST): $${fullAmount.toFixed(2)} AUD\n- 💰 Deposit Already Paid: $${invoiceData.depositPaid.toFixed(2)} AUD\n\n💳 FINAL PAYMENT DUE: $${invoiceData.finalTotal.toFixed(2)} AUD\n\nCalculation: $${fullAmount.toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)} AUD`;
       } else {
-        message += `\n\n💳 AMOUNT YOU NEED TO PAY: $${invoiceData.total.toFixed(2)} AUD`;
+        message += `\n\n💰 TAX DETAILS:\n- Tax Type: ${taxType}\n- GST (${gstRatePct}%): $${(invoiceData.gst ?? 0).toFixed(2)} AUD\n\n💳 AMOUNT YOU NEED TO PAY: $${invoiceData.total.toFixed(2)} AUD`;
       }
       
       message += `\n- Status: ${invoiceData.status}\n\nPayment is due within 30 days of the invoice date. Please refer to the attached PDF for payment details and bank information.\n\nThank you for your business!`;
@@ -1128,6 +1302,14 @@ class EmailService {
                   <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Full Amount (with GST):</td>
                   <td style="padding: 8px 0; color: #1e293b;">$${(invoiceData.fullAmountWithGST || invoiceData.total).toFixed(2)} AUD</td>
                 </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Tax Type:</td>
+                  <td style="padding: 8px 0; color: #1e293b;">${invoiceData.taxType || 'Inclusive'}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">GST (${Number.isFinite(Number(invoiceData.taxRate)) ? Number(invoiceData.taxRate) : 10}%):</td>
+                  <td style="padding: 8px 0; color: #1e293b;">$${(invoiceData.gst ?? 0).toFixed(2)} AUD</td>
+                </tr>
                 <tr style="background-color: #dbeafe;">
                   <td style="padding: 12px 8px; color: #1e40af; font-weight: bold; font-size: 16px;">💰 Deposit Already Paid:</td>
                   <td style="padding: 12px 8px; color: #1e40af; font-weight: bold; font-size: 16px;">-$${invoiceData.depositPaid.toFixed(2)} AUD</td>
@@ -1142,8 +1324,12 @@ class EmailService {
                   <td style="padding: 8px 0; color: #1e293b;">$${invoiceData.subtotal.toFixed(2)}</td>
                 </tr>
                 <tr>
-                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">GST (10%):</td>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">GST (${Number.isFinite(Number(invoiceData.taxRate)) ? Number(invoiceData.taxRate) : 10}%):</td>
                   <td style="padding: 8px 0; color: #1e293b;">$${invoiceData.gst.toFixed(2)}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 8px 0; color: #64748b; font-weight: bold;">Tax Type:</td>
+                  <td style="padding: 8px 0; color: #1e293b;">${invoiceData.taxType || 'Inclusive'}</td>
                 </tr>
                 <tr style="background-color: #dcfce7; border: 2px solid #22c55e;">
                   <td style="padding: 15px 8px; color: #166534; font-weight: bold; font-size: 20px;">💳 Amount Due:</td>

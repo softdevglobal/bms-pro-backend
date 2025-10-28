@@ -2,6 +2,7 @@ const express = require('express');
 const admin = require('../firebaseAdmin');
 const emailService = require('../services/emailService');
 const { verifyToken } = require('../middleware/authMiddleware');
+const { createDepositCheckoutLink, getConnectedAccountStatus } = require('../services/stripeService');
 
 const router = express.Router();
 
@@ -1085,6 +1086,43 @@ router.put('/:id/status', verifyToken, async (req, res) => {
       }
     }
 
+    // If confirming and we have a positive deposit amount, generate Stripe link BEFORE saving
+    if (status === 'confirmed') {
+      try {
+        const depositForStripe = Number(
+          (updatePayload.payment_details && updatePayload.payment_details.deposit_amount) ||
+          updatePayload.depositAmount || 0
+        );
+        // Only create Stripe link when paymentMethods.stripe is enabled for this hall owner
+        let stripeEnabled = false;
+        try {
+          const ownerDoc = await admin.firestore().collection('users').doc(actualHallOwnerId).get();
+          const pm = ownerDoc.exists ? (ownerDoc.data().paymentMethods || {}) : {};
+          stripeEnabled = Boolean(pm.stripe);
+        } catch (_) {}
+        if (depositForStripe > 0 && stripeEnabled) {
+          console.log('Attempting to generate Stripe link (pre-save)', { bookingId: id, depositForStripe });
+          const preSaveStripeUrl = await createDepositCheckoutLink({
+            hallOwnerId: actualHallOwnerId,
+            bookingId: id,
+            bookingCode: bookingData.bookingCode,
+            customerName: bookingData.customerName,
+            hallName: bookingData.hallName,
+            depositAmount: depositForStripe
+          });
+          if (preSaveStripeUrl) {
+            updatePayload.stripePaymentUrl = preSaveStripeUrl;
+            if (updatePayload.payment_details && typeof updatePayload.payment_details === 'object') {
+              updatePayload.payment_details.stripe_payment_url = preSaveStripeUrl;
+            }
+            console.log('Stripe link attached to update payload');
+          }
+        }
+      } catch (preStripeErr) {
+        console.warn('Stripe pre-save link generation failed (non-blocking):', preStripeErr?.message || preStripeErr);
+      }
+    }
+
     // Update booking status (and optional deposit fields)
     await admin.firestore().collection('bookings').doc(id).update(updatePayload);
 
@@ -1157,12 +1195,18 @@ router.put('/:id/status', verifyToken, async (req, res) => {
             notificationMessage = `Your booking for ${bookingForEmail.eventType} on ${bookingForEmail.bookingDate} status has been updated to ${status}.`;
         }
 
+        // Reuse pre-saved Stripe URL (if any) for the email content
+        const stripePaymentUrl = updatePayload.stripePaymentUrl || (updatePayload.payment_details && updatePayload.payment_details.stripe_payment_url) || null;
+        console.log('Email composition - stripePaymentUrl:', stripePaymentUrl ? 'present' : 'absent');
+
+        const paymentDetails = bookingForEmail.payment_details || {};
         const notificationData = {
           type: `booking_${status}`,
           title: notificationTitle,
           message: notificationMessage,
           data: {
             bookingId: id,
+            bookingCode: bookingForEmail.bookingCode,
             eventType: bookingForEmail.eventType,
             bookingDate: bookingForEmail.bookingDate,
             startTime: bookingForEmail.startTime,
@@ -1170,10 +1214,16 @@ router.put('/:id/status', verifyToken, async (req, res) => {
             status: status,
             hallName: bookingForEmail.hallName,
             calculatedPrice: bookingForEmail.calculatedPrice,
-            // Surface deposit details for email rendering if present
+            // Payment breakdown for email rendering
+            totalAmount: paymentDetails.total_amount ?? null,
+            finalDue: paymentDetails.final_due ?? null,
+            taxType: paymentDetails.tax?.tax_type ?? null,
+            taxAmount: paymentDetails.tax?.tax_amount ?? null,
+            gst: paymentDetails.tax?.gst ?? null,
             depositType: bookingForEmail.depositType || 'None',
             depositValue: bookingForEmail.depositValue || 0,
-            depositAmount: bookingForEmail.depositAmount || 0
+            depositAmount: bookingForEmail.depositAmount || paymentDetails.deposit_amount || 0,
+            stripePaymentUrl: stripePaymentUrl
           }
         };
 
@@ -1438,7 +1488,7 @@ router.put('/:id', verifyToken, async (req, res) => {
       return res.status(403).json({ message: 'Access denied. Only hall owners and sub-users can update bookings.' });
     }
 
-    const updateData = {};
+  const updateData = {};
 
     // Validate and apply fields if present
     if (customerName !== undefined) updateData.customerName = String(customerName).trim();
@@ -1463,7 +1513,33 @@ router.put('/:id', verifyToken, async (req, res) => {
     }
     // Allow updating payment_details (for marking deposit paid etc.)
     if (req.body.payment_details !== undefined && typeof req.body.payment_details === 'object') {
+      // Detect deposit paid toggle for audit
+      const prevPaid = Boolean(existing?.payment_details?.deposit_paid);
+      const nextPaid = Boolean(req.body.payment_details?.deposit_paid);
+      const depositAmount = Number(req.body.payment_details?.deposit_amount || existing?.payment_details?.deposit_amount || existing?.depositAmount || 0);
       updateData.payment_details = req.body.payment_details;
+
+      if (prevPaid !== nextPaid) {
+        try {
+          const AuditService = require('../services/auditService');
+          const userEmail = (req.user && (req.user.email || req.user.user_email)) || '';
+          const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
+          const hallId = existing.hallOwnerId;
+          await AuditService.logBookingDepositStatusChanged(
+            req.user.uid || req.user.user_id,
+            userEmail,
+            (await admin.firestore().collection('users').doc(req.user.uid || req.user.user_id).get()).data().role,
+            { id, bookingCode: existing.bookingCode },
+            prevPaid,
+            nextPaid,
+            depositAmount,
+            ipAddress,
+            hallId
+          );
+        } catch (auditErr) {
+          console.error('Audit log for deposit toggle failed (non-blocking):', auditErr?.message || auditErr);
+        }
+      }
     }
 
     let hallNameToSet = null;
@@ -1699,6 +1775,37 @@ router.get('/test', (req, res) => {
     timestamp: new Date().toISOString(),
     status: 'OK'
   });
+});
+
+// Diagnostic endpoint to test Stripe link generation and account readiness
+router.post('/diagnostics/stripe-link', verifyToken, async (req, res) => {
+  try {
+    const { hallOwnerId, bookingId, bookingCode, depositAmount, customerName, hallName } = req.body || {};
+    if (!hallOwnerId) return res.status(400).json({ message: 'hallOwnerId is required' });
+    const userSnap = await admin.firestore().collection('users').doc(hallOwnerId).get();
+    if (!userSnap.exists) return res.status(404).json({ message: 'Hall owner not found' });
+    const acct = userSnap.data().stripeAccountId;
+    const acctStatus = await getConnectedAccountStatus(acct);
+    console.log('Diagnostics: connected account', acctStatus);
+
+    const resultUrl = await createDepositCheckoutLink({
+      hallOwnerId,
+      bookingId: bookingId || 'diagnostic',
+      bookingCode: bookingCode || 'DIAG',
+      depositAmount: Number(depositAmount || 1),
+      customerName: customerName || 'Diagnostic',
+      hallName: hallName || 'Diagnostics'
+    });
+
+    res.json({
+      message: 'Diagnostics complete',
+      accountStatus: acctStatus,
+      link: resultUrl
+    });
+  } catch (err) {
+    console.error('Diagnostics failed:', err?.message || err);
+    res.status(500).json({ message: err?.message || 'Diagnostics failed' });
+  }
 });
 
 // Test route for email functionality

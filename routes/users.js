@@ -342,6 +342,296 @@ router.put('/settings', verifyToken, async (req, res) => {
   }
 });
 
+// GET /api/users/stripe-account - Get hall owner's Stripe Account ID (handles sub-users)
+router.get('/stripe-account', verifyToken, async (req, res) => {
+  try {
+    const requesterId = req.user.uid;
+
+    // Load requester to determine hall owner target
+    const requesterDoc = await admin.firestore().collection('users').doc(requesterId).get();
+    if (!requesterDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const requesterData = requesterDoc.data();
+
+    const targetUid = requesterData.role === 'sub_user' && requesterData.parentUserId
+      ? requesterData.parentUserId
+      : requesterId;
+
+    const targetDoc = await admin.firestore().collection('users').doc(targetUid).get();
+    if (!targetDoc.exists) {
+      return res.status(404).json({ message: 'Hall owner not found' });
+    }
+
+    const data = targetDoc.data();
+    res.json({ stripeAccountId: data?.stripeAccountId || '' });
+  } catch (error) {
+    console.error('Error fetching stripe account id:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// PUT /api/users/stripe-account - Set hall owner's Stripe Account ID (handles sub-users)
+router.put('/stripe-account', verifyToken, async (req, res) => {
+  try {
+    const { stripeAccountId } = req.body;
+    const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
+
+    const value = (stripeAccountId || '').trim();
+    if (value && !value.startsWith('acct_')) {
+      return res.status(400).json({ message: 'Stripe Account ID must start with "acct_"' });
+    }
+
+    // Determine hall owner target
+    const requesterId = req.user.uid;
+    const requesterDoc = await admin.firestore().collection('users').doc(requesterId).get();
+    if (!requesterDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const requesterData = requesterDoc.data();
+
+    const targetUid = requesterData.role === 'sub_user' && requesterData.parentUserId
+      ? requesterData.parentUserId
+      : requesterId;
+
+    // Update only stripeAccountId field on hall owner's user doc
+    await admin.firestore().collection('users').doc(targetUid).set({
+      stripeAccountId: value,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    // Audit log
+    try {
+      const AuditService = require('../services/auditService');
+      const hallId = targetUid; // hall owner's uid is hallId
+      await AuditService.logEvent({
+        userId: req.user.uid,
+        userEmail: req.user.email,
+        userRole: req.user.role,
+        action: 'stripe_account_updated',
+        targetType: 'user',
+        target: `User: ${targetUid}`,
+        changes: { new: { stripeAccountId: value ? 'acct_****' : '' } },
+        ipAddress,
+        hallId,
+        additionalInfo: 'Updated Stripe Account ID for hall owner'
+      });
+    } catch (auditErr) {
+      console.warn('Audit log failed for stripe update:', auditErr.message);
+    }
+
+    res.json({ stripeAccountId: value });
+  } catch (error) {
+    console.error('Error updating stripe account id:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// GET /api/users/bank-details - Get hall owner's bank transfer details (handles sub-users)
+router.get('/bank-details', verifyToken, async (req, res) => {
+  try {
+    const requesterId = req.user.uid;
+
+    // Determine hall owner target
+    const requesterDoc = await admin.firestore().collection('users').doc(requesterId).get();
+    if (!requesterDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const requesterData = requesterDoc.data();
+
+    const targetUid = requesterData.role === 'sub_user' && requesterData.parentUserId
+      ? requesterData.parentUserId
+      : requesterId;
+
+    const targetDoc = await admin.firestore().collection('users').doc(targetUid).get();
+    if (!targetDoc.exists) {
+      return res.status(404).json({ message: 'Hall owner not found' });
+    }
+
+    const data = targetDoc.data();
+    const bankDetails = data?.bankDetails || null;
+    res.json({ bankDetails });
+  } catch (error) {
+    console.error('Error fetching bank details:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// PUT /api/users/bank-details - Set hall owner's bank transfer details (handles sub-users)
+router.put('/bank-details', verifyToken, async (req, res) => {
+  try {
+    const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
+    const {
+      accountName = '',
+      bsb = '',
+      accountNumber = '',
+      bankName = '',
+      referenceNote = ''
+    } = req.body || {};
+
+    // Basic validation
+    if (bsb && !/^\d{3}-?\d{3}$/.test(bsb)) {
+      return res.status(400).json({ message: 'Invalid BSB format. Use 6 digits (e.g. 123-456 or 123456)' });
+    }
+    if (accountNumber && !/^\d{4,12}$/.test(accountNumber)) {
+      return res.status(400).json({ message: 'Invalid account number. Use 4-12 digits' });
+    }
+
+    // Determine hall owner target
+    const requesterId = req.user.uid;
+    const requesterDoc = await admin.firestore().collection('users').doc(requesterId).get();
+    if (!requesterDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const requesterData = requesterDoc.data();
+
+    const targetUid = requesterData.role === 'sub_user' && requesterData.parentUserId
+      ? requesterData.parentUserId
+      : requesterId;
+
+    const bankDetails = {
+      accountName: String(accountName || '').trim(),
+      bsb: String(bsb || '').replace(/[^0-9]/g, '').replace(/(\d{3})(\d{3})/, '$1-$2'),
+      accountNumber: String(accountNumber || '').trim(),
+      bankName: String(bankName || '').trim(),
+      referenceNote: String(referenceNote || '').trim()
+    };
+
+    await admin.firestore().collection('users').doc(targetUid).set({
+      bankDetails,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    // Audit log
+    try {
+      const AuditService = require('../services/auditService');
+      const hallId = targetUid;
+      await AuditService.logEvent({
+        userId: req.user.uid,
+        userEmail: req.user.email,
+        userRole: req.user.role,
+        action: 'bank_details_updated',
+        targetType: 'user',
+        target: `User: ${targetUid}`,
+        changes: { new: { bankDetails: { ...bankDetails, accountNumber: bankDetails.accountNumber ? '****' : '' } } },
+        ipAddress,
+        hallId,
+        additionalInfo: 'Updated bank transfer details for hall owner'
+      });
+    } catch (auditErr) {
+      console.warn('Audit log failed for bank details update:', auditErr.message);
+    }
+
+    res.json({ bankDetails });
+  } catch (error) {
+    console.error('Error updating bank details:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// GET /api/users/payment-methods - Get payment method toggles (handles sub-users)
+router.get('/payment-methods', verifyToken, async (req, res) => {
+  try {
+    const requesterId = req.user.uid;
+    const requesterDoc = await admin.firestore().collection('users').doc(requesterId).get();
+    if (!requesterDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const requesterData = requesterDoc.data();
+    const targetUid = requesterData.role === 'sub_user' && requesterData.parentUserId
+      ? requesterData.parentUserId
+      : requesterId;
+
+    const targetDoc = await admin.firestore().collection('users').doc(targetUid).get();
+    if (!targetDoc.exists) {
+      return res.status(404).json({ message: 'Hall owner not found' });
+    }
+    const data = targetDoc.data();
+    const defaults = { stripe: false, bankTransfer: true, cash: true, cheque: false };
+    const saved = data?.paymentMethods || {};
+    res.json({ paymentMethods: { ...defaults, ...saved } });
+  } catch (error) {
+    console.error('Error fetching payment methods:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// PUT /api/users/payment-methods - Update payment method toggles (handles sub-users)
+router.put('/payment-methods', verifyToken, async (req, res) => {
+  try {
+    const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
+    // Accept either top-level fields or nested paymentMethods
+    const payload = req.body || {};
+    const incoming = payload.paymentMethods || payload;
+    const updates = {};
+    if (incoming.stripe !== undefined) {
+      if (typeof incoming.stripe !== 'boolean') return res.status(400).json({ message: 'stripe must be boolean' });
+      updates.stripe = incoming.stripe;
+    }
+    if (incoming.bankTransfer !== undefined) {
+      if (typeof incoming.bankTransfer !== 'boolean') return res.status(400).json({ message: 'bankTransfer must be boolean' });
+      updates.bankTransfer = incoming.bankTransfer;
+    }
+    if (incoming.cash !== undefined) {
+      if (typeof incoming.cash !== 'boolean') return res.status(400).json({ message: 'cash must be boolean' });
+      updates.cash = incoming.cash;
+    }
+    if (incoming.cheque !== undefined) {
+      if (typeof incoming.cheque !== 'boolean') return res.status(400).json({ message: 'cheque must be boolean' });
+      updates.cheque = incoming.cheque;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ message: 'No valid payment method fields provided' });
+    }
+
+    const requesterId = req.user.uid;
+    const requesterDoc = await admin.firestore().collection('users').doc(requesterId).get();
+    if (!requesterDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const requesterData = requesterDoc.data();
+
+    const targetUid = requesterData.role === 'sub_user' && requesterData.parentUserId
+      ? requesterData.parentUserId
+      : requesterId;
+
+    const targetRef = admin.firestore().collection('users').doc(targetUid);
+    const currentDoc = await targetRef.get();
+    const current = currentDoc.exists && currentDoc.data().paymentMethods ? currentDoc.data().paymentMethods : {};
+    const newPaymentMethods = { ...current, ...updates };
+
+    await targetRef.set({
+      paymentMethods: newPaymentMethods,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    try {
+      const AuditService = require('../services/auditService');
+      const hallId = targetUid;
+      await AuditService.logEvent({
+        userId: req.user.uid,
+        userEmail: req.user.email,
+        userRole: req.user.role,
+        action: 'payment_methods_updated',
+        targetType: 'user',
+        target: `User: ${targetUid}`,
+        changes: { new: { paymentMethods: newPaymentMethods } },
+        ipAddress,
+        hallId,
+        additionalInfo: 'Updated payment method toggles'
+      });
+    } catch (auditErr) {
+      console.warn('Audit log failed for payment methods update:', auditErr.message);
+    }
+
+    res.json({ paymentMethods: newPaymentMethods });
+  } catch (error) {
+    console.error('Error updating payment methods:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // GET /api/users/settings - Get user settings
 router.get('/settings', verifyToken, async (req, res) => {
   try {
