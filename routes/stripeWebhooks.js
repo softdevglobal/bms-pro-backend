@@ -28,6 +28,77 @@ router.post('/', async (req, res) => {
 
     const connectAccountId = req.headers['stripe-account'] || (event && event.account) || null;
 
+		// Persist a concise copy of the webhook for auditing/idempotency
+		try {
+			const minimal = (() => {
+				switch (event.type) {
+					case 'checkout.session.completed':
+					case 'checkout.session.async_payment_failed':
+					case 'checkout.session.async_payment_succeeded':
+					case 'checkout.session.expired': {
+						const s = event.data.object || {};
+						return {
+							sessionId: s.id,
+							paymentStatus: s.payment_status,
+							amountTotal: s.amount_total,
+							currency: s.currency,
+							bookingId: s.metadata && s.metadata.bookingId,
+							hallOwnerId: s.metadata && s.metadata.hallOwnerId
+						};
+					}
+					case 'invoice.created':
+					case 'invoice.payment_failed':
+					case 'invoice.payment_succeeded':
+					case 'invoice.paid':
+					case 'invoice.sent':
+					case 'invoice.updated': {
+						const inv = event.data.object || {};
+						return {
+							invoiceId: inv.id,
+							status: inv.status,
+							paid: inv.paid,
+							number: inv.number,
+							customerEmail: inv.customer_email,
+							paymentIntent: inv.payment_intent
+						};
+					}
+					case 'payment_link.created':
+					case 'payment_link.updated': {
+						const pl = event.data.object || {};
+						return { paymentLinkId: pl.id, url: pl.url, active: pl.active };
+					}
+					case 'refund.created':
+					case 'refund.failed':
+					case 'refund.updated': {
+						const rf = event.data.object || {};
+						return {
+							refundId: rf.id,
+							status: rf.status,
+							amount: rf.amount,
+							currency: rf.currency,
+							paymentIntent: rf.payment_intent,
+							charge: rf.charge
+						};
+					}
+					default:
+						return undefined;
+				}
+			})();
+
+			const doc = {
+				id: event.id,
+				type: event.type,
+				account: connectAccountId || null,
+				created: new Date((event.created || Math.floor(Date.now() / 1000)) * 1000),
+				livemode: Boolean(event.livemode),
+				data: minimal || null,
+				receivedAt: admin.firestore.FieldValue.serverTimestamp()
+			};
+			await admin.firestore().collection('stripe_events').doc(event.id).set(doc, { merge: true });
+		} catch (persistErr) {
+			console.warn('Stripe webhook persist failed (non-blocking):', persistErr && persistErr.message ? persistErr.message : persistErr);
+		}
+
     // Handle both sync and async payment confirmations
     switch (event.type) {
       case 'checkout.session.completed': {
@@ -88,6 +159,28 @@ router.post('/', async (req, res) => {
         // Optionally mark a failure flag or notify; keeping no-op for now
         break;
       }
+			case 'checkout.session.expired': {
+				// Intentionally no-op; event already persisted above
+				break;
+			}
+			case 'invoice.created':
+			case 'invoice.payment_failed':
+			case 'invoice.payment_succeeded':
+			case 'invoice.paid':
+			case 'invoice.sent':
+			case 'invoice.updated': {
+				// Reserved for future invoice <> booking reconciliation
+				break;
+			}
+			case 'payment_link.created':
+			case 'payment_link.updated': {
+				break;
+			}
+			case 'refund.created':
+			case 'refund.failed':
+			case 'refund.updated': {
+				break;
+			}
       default:
         break;
     }
