@@ -73,31 +73,29 @@ async function createDepositCheckoutLink({ hallOwnerId, bookingId, bookingCode, 
       ? Math.floor(Math.round(amountNum * 100) * (platformFeePct / 100))
       : undefined;
 
-    const session = await stripe.checkout.sessions.create(
-      {
-        mode: 'payment',
-        payment_method_types: ['card'],
-        line_items: [lineItem],
-        success_url: successUrl,
-        cancel_url: cancelUrl,
-        client_reference_id: bookingId,
+    // Use destination charges so application fees work in live
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      payment_method_types: ['card'],
+      line_items: [lineItem],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      client_reference_id: bookingId,
+      metadata: {
+        bookingId,
+        hallOwnerId,
+        purpose: 'deposit',
+      },
+      payment_intent_data: {
+        transfer_data: { destination: connectedAccountId },
+        ...(applicationFeeAmount ? { application_fee_amount: applicationFeeAmount } : {}),
         metadata: {
           bookingId,
           hallOwnerId,
-          purpose: 'deposit',
-        },
-        ...(applicationFeeAmount ? { payment_intent_data: { application_fee_amount: applicationFeeAmount } } : {}),
-        payment_intent_data: {
-          ...(applicationFeeAmount ? { application_fee_amount: applicationFeeAmount } : {}),
-          metadata: {
-            bookingId,
-            hallOwnerId,
-            purpose: 'deposit'
-          }
+          purpose: 'deposit'
         }
-      },
-      { stripeAccount: connectedAccountId }
-    );
+      }
+    });
 
     const url = session?.url || null;
     if (!url) {

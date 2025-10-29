@@ -18,12 +18,21 @@ router.post('/', async (req, res) => {
   try {
     if (!stripe) return res.status(500).send('Stripe not configured');
     const sig = req.headers['stripe-signature'];
-    const whSecret = process.env.STRIPE_CONNECT_WEBHOOK_SECRET;
+    const connectSecret = process.env.STRIPE_CONNECT_WEBHOOK_SECRET;
+    const platformSecret = process.env.STRIPE_WEBHOOK_SECRET;
     let event;
+    // Try Connect secret first (for connected account events), then fall back to platform secret
     try {
-      event = stripe.webhooks.constructEvent(req.body, sig, whSecret);
-    } catch (err) {
-      return res.status(400).send(`Webhook Error: ${err.message}`);
+      if (!connectSecret) throw new Error('Missing STRIPE_CONNECT_WEBHOOK_SECRET');
+      event = stripe.webhooks.constructEvent(req.body, sig, connectSecret);
+    } catch (errConnect) {
+      try {
+        if (!platformSecret) throw errConnect;
+        event = stripe.webhooks.constructEvent(req.body, sig, platformSecret);
+      } catch (errPlatform) {
+        const errMsg = (errPlatform && errPlatform.message) || (errConnect && errConnect.message) || 'Unknown webhook verification error';
+        return res.status(400).send(`Webhook Error: ${errMsg}`);
+      }
     }
 
     const connectAccountId = req.headers['stripe-account'] || (event && event.account) || null;
