@@ -178,6 +178,25 @@ router.post('/', async (req, res) => {
                   console.error('Failed to write final payment details to booking:', e?.message || e);
                 }
               }
+
+              // Create a payment record for Stripe final payment
+              try {
+                await admin.firestore().collection('payments').add({
+                  invoiceId: invoiceId,
+                  invoiceNumber: inv.invoiceNumber,
+                  bookingId: inv.bookingId,
+                  hallOwnerId: inv.hallOwnerId,
+                  amount: amountPaid,
+                  paymentMethod: 'Stripe',
+                  reference: session.payment_intent || session.id || 'stripe',
+                  notes: 'Stripe final payment',
+                  processedAt: admin.firestore.FieldValue.serverTimestamp(),
+                  processedBy: 'stripe',
+                  createdAt: admin.firestore.FieldValue.serverTimestamp()
+                });
+              } catch (e) {
+                console.warn('Failed to create payment record for Stripe final payment (non-blocking):', e?.message || e);
+              }
             }
           } catch (e) {
             console.error('Failed to mark FINAL invoice paid:', e?.message || e);

@@ -1190,6 +1190,63 @@ router.put('/:id/status', verifyToken, async (req, res) => {
 
     await admin.firestore().collection('invoices').doc(id).update(updateData);
 
+    // If manually marked as PAID, ensure paidAmount is populated and create a bank payment record
+    if (status === 'PAID') {
+      try {
+        const invRef = admin.firestore().collection('invoices').doc(id);
+        const invSnap = await invRef.get();
+        if (invSnap.exists) {
+          const inv = invSnap.data();
+          const paidAmount = Number(inv.paidAmount || (inv.depositPaid > 0 ? (inv.finalTotal || 0) : (inv.total || 0)) || 0);
+          const needsUpdate = !inv.paidAmount || inv.paidAmount <= 0;
+          if (needsUpdate) {
+            await invRef.update({
+              paidAmount: paidAmount,
+              paidAt: admin.firestore.FieldValue.serverTimestamp(),
+              updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+          }
+
+          // Create a bank transfer payment record (manual marking)
+          const paymentData = {
+            invoiceId: id,
+            invoiceNumber: inv.invoiceNumber,
+            bookingId: inv.bookingId,
+            hallOwnerId: inv.hallOwnerId,
+            amount: paidAmount,
+            paymentMethod: 'Bank Transfer',
+            reference: 'Manual mark as PAID',
+            notes: 'Marked as paid by hall owner',
+            processedAt: admin.firestore.FieldValue.serverTimestamp(),
+            processedBy: userId,
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+          };
+          await admin.firestore().collection('payments').add(paymentData);
+
+          // If FINAL invoice, reflect final payment on booking
+          if (inv.invoiceType === 'FINAL' && inv.bookingId) {
+            try {
+              const bookingRef = admin.firestore().collection('bookings').doc(inv.bookingId);
+              const snap = await bookingRef.get();
+              if (snap.exists) {
+                const data = snap.data();
+                const paymentDetails = Object.assign({}, data.payment_details || {});
+                paymentDetails.final_paid = true;
+                paymentDetails.final_paid_amount = paidAmount;
+                paymentDetails.final_paid_at = admin.firestore.FieldValue.serverTimestamp();
+                paymentDetails.final_due = 0;
+                await bookingRef.update({ payment_details: paymentDetails, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+              }
+            } catch (e) {
+              console.warn('Booking final payment state update failed (non-blocking):', e?.message || e);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Post-PAID normalization failed (non-blocking):', e?.message || e);
+      }
+    }
+
   // If status is 'SENT', send email with PDF
   if (status === 'SENT' && invoiceData.status !== 'SENT') {
       try {
