@@ -1212,6 +1212,7 @@ class EmailService {
         message += `\n\n💰 TAX DETAILS:\n- Tax Type: ${taxType}\n- GST (${gstRatePct}%): $${(invoiceData.gst ?? 0).toFixed(2)} AUD\n\n💳 AMOUNT YOU NEED TO PAY: $${invoiceData.total.toFixed(2)} AUD`;
       }
       
+      // No raw link in plain text to avoid long URLs in inbox previews
       message += `\n- Status: ${invoiceData.status}\n\nPayment is due within 30 days of the invoice date. Please refer to the attached PDF for payment details and bank information.\n\nThank you for your business!`;
 
       const mailOptions = {
@@ -1361,10 +1362,18 @@ class EmailService {
             </div>
             ` : ''}
             
-            <div style="background-color: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 20px; margin: 20px 0;">
+    <div style="background-color: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 20px; margin: 20px 0;">
               <h3 style="color: #92400e; margin: 0 0 15px 0;">Payment Information</h3>
               <div style="color: #92400e; font-size: 14px; line-height: 1.6;">
-                <p style="margin: 0 0 10px 0;"><strong>Payment Method:</strong> Bank Transfer</p>
+        ${invoiceData.stripePaymentUrl ? `
+          <div style="text-align:center;margin:10px 0 20px;">
+            <a href="${invoiceData.stripePaymentUrl}" style="background:#16a34a;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:700;display:inline-block;">
+              Pay Final Amount Online
+            </a>
+          </div>
+        ` : `
+          <p style="margin: 0 0 10px 0;"><strong>Payment Method:</strong> Bank Transfer</p>
+        `}
                 <p style="margin: 0 0 10px 0;"><strong>Account Name:</strong> Cranbourne Public Hall</p>
                 <p style="margin: 0 0 10px 0;"><strong>BSB:</strong> 123-456</p>
                 <p style="margin: 0;"><strong>Account Number:</strong> 12345678</p>

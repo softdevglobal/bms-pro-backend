@@ -115,6 +115,8 @@ router.post('/', async (req, res) => {
         // Only mark paid if payment_status is paid (card) or defer to async events for redirect methods
         if (session.payment_status !== 'paid') break;
         const bookingId = session?.metadata?.bookingId;
+        const purpose = session?.metadata?.purpose;
+        const invoiceId = session?.metadata?.invoiceId;
         const hallOwnerId = session?.metadata?.hallOwnerId;
 
         if (bookingId) {
@@ -139,6 +141,46 @@ router.post('/', async (req, res) => {
             }
           } catch (e) {
             console.error('Failed to mark deposit paid:', e);
+          }
+        }
+
+        // Handle FINAL invoice payments
+        if (purpose === 'final' && invoiceId) {
+          try {
+            const invRef = admin.firestore().collection('invoices').doc(invoiceId);
+            const invSnap = await invRef.get();
+            if (invSnap.exists) {
+              const inv = invSnap.data();
+              const amountPaid = Number(inv.depositPaid > 0 ? (inv.finalTotal ?? 0) : (inv.total ?? 0));
+              await invRef.update({
+                paidAmount: amountPaid,
+                status: 'PAID',
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+              });
+
+              // Also save final payment details on the related booking document
+              if (inv.bookingId) {
+                try {
+                  const bookingRef = admin.firestore().collection('bookings').doc(inv.bookingId);
+                  const snap = await bookingRef.get();
+                  if (snap.exists) {
+                    const data = snap.data();
+                    const paymentDetails = Object.assign({}, data.payment_details || {});
+                    paymentDetails.final_paid = true;
+                    paymentDetails.final_paid_amount = amountPaid;
+                    paymentDetails.final_paid_at = admin.firestore.FieldValue.serverTimestamp();
+                    paymentDetails.final_stripe_session_id = session.id || null;
+                    paymentDetails.final_stripe_payment_intent = session.payment_intent || null;
+                    paymentDetails.final_due = 0;
+                    await bookingRef.update({ payment_details: paymentDetails, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+                  }
+                } catch (e) {
+                  console.error('Failed to write final payment details to booking:', e?.message || e);
+                }
+              }
+            }
+          } catch (e) {
+            console.error('Failed to mark FINAL invoice paid:', e?.message || e);
           }
         }
 

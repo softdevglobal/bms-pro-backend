@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { verifyToken } = require('../middleware/authMiddleware');
 const https = require('https');
+const { createFinalCheckoutLink } = require('../services/stripeService');
 
 const router = express.Router();
 
@@ -112,7 +113,7 @@ function buildInvoiceHTML(invoiceData) {
 <style>
   @page { size: A4; margin: 16mm 10mm; }
   body { margin:0; padding:0; font-family: Arial, Helvetica, sans-serif; color:#0f172a; -webkit-print-color-adjust:exact; background:#ffffff; }
-  .container { max-width:800px; margin:100px auto; padding:0 40px; box-sizing:border-box; }
+  .container { max-width:820px; margin:100px auto; padding:0 40px 40px 40px; box-sizing:border-box; }
   .items { width:100%; border-collapse:collapse; font-size:13px; margin-bottom:25px; }
   .items thead th { text-align:left; padding:10px 8px; color:#fff; background:linear-gradient(90deg,#1f8ea6,#0b6b8a); }
   .items tbody td { padding:12px 8px; border-bottom:1px solid #e2e8f0; }
@@ -120,6 +121,14 @@ function buildInvoiceHTML(invoiceData) {
   .totals .card { width:260px; font-size:13px; }
   .totals .row { display:flex; justify-content:space-between; padding:5px 0; }
   .totals .grand { display:flex; justify-content:space-between; padding:10px 0; border-top:1px solid #e2e8f0; margin-top:6px; font-weight:700; font-size:15px; }
+  .hero { margin: 20px 0 26px 0; padding: 22px; border-radius: 14px; background: linear-gradient(90deg,#10b981,#0ea5e9); color:#fff; box-shadow: 0 10px 30px rgba(16,185,129,0.25); }
+  .hero .t { text-transform: uppercase; font-size: 12px; letter-spacing: 1.5px; opacity: .9; font-weight: 700; }
+  .hero .amt { font-size: 30px; font-weight: 800; margin-top: 6px; }
+  .hero .sub { margin-top: 6px; font-size: 12px; opacity: .95; }
+  .badges { display:flex; flex-wrap:wrap; gap:8px; margin: 8px 0 16px 0; }
+  .chip { display:inline-block; padding:6px 10px; background:#f1f5f9; color:#0f172a; border-radius:999px; font-size:11px; font-weight:700; border:1px solid #e2e8f0; }
+  .chip-blue { background:#dbeafe; color:#1e40af; border-color:#bfdbfe; }
+  .chip-purple { background:#ede9fe; color:#5b21b6; border-color:#ddd6fe; }
 </style>
 </head>
 <body>
@@ -182,6 +191,20 @@ function buildInvoiceHTML(invoiceData) {
     </div>
   </div>
 
+  <!-- Badges / quick context -->
+  <div class="badges">
+    <span class="chip">Invoice ${invoiceNo}</span>
+    ${bookingRef ? `<span class="chip chip-blue">Booking ${bookingRef}</span>` : ''}
+    <span class="chip chip-purple">${heading}</span>
+  </div>
+
+  <!-- Eye-catching hero amount -->
+  <div class="hero">
+    <div class="t">${depositPaid > 0 ? 'Final Payment Due' : 'Total Amount'}</div>
+    <div class="amt">$${totalDue.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} AUD</div>
+    ${depositPaid > 0 ? `<div class="sub">Final Amount = ${totalIncl.toLocaleString('en-AU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} - ${depositPaid.toLocaleString('en-AU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} = ${totalDue.toLocaleString('en-AU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>` : ''}
+  </div>
+
   <table class="items">
     <thead>
       <tr>
@@ -205,6 +228,14 @@ function buildInvoiceHTML(invoiceData) {
       <div class="grand"><span>Total Due</span><span>${fmt(totalDue)}</span></div>
     </div>
   </div>
+
+  ${invoiceData.stripePaymentUrl ? `
+  <div style="text-align:center;margin:18px 0 6px;">
+    <a href="${invoiceData.stripePaymentUrl}" style="background:#0ea5e9;color:#fff;padding:12px 22px;border-radius:10px;text-decoration:none;font-weight:700;display:inline-block;">
+      Pay Final Amount Online
+    </a>
+  </div>
+  ` : ''}
 
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-top:50px;font-size:12px;color:#475569;">
     <div>
@@ -612,16 +643,35 @@ async function generateInvoicePDF_PDFKit(invoiceData) {
          .fill('#ffffff')
          .stroke('#e2e8f0', 1);
       
-      doc.fillColor(secondaryColor)
-         .fontSize(10)
-         .font('Helvetica')
-         .text('Payment Method: Bank Transfer', 60, paymentSectionY + 20)
-         .text('Account Name: Cranbourne Public Hall', 60, paymentSectionY + 35)
-         .text('BSB: 123-456', 60, paymentSectionY + 50)
-         .text('Account Number: 12345678', 60, paymentSectionY + 65);
+  doc.fillColor(secondaryColor)
+     .fontSize(10)
+     .font('Helvetica')
+     .text('Payment Method: Bank Transfer', 60, paymentSectionY + 20)
+     .text('Account Name: Cranbourne Public Hall', 60, paymentSectionY + 35)
+     .text('BSB: 123-456', 60, paymentSectionY + 50)
+     .text('Account Number: 12345678', 60, paymentSectionY + 65);
+
+  if (invoiceData.stripePaymentUrl) {
+    const btnX = 60;
+    const btnY = paymentSectionY + 85;
+    const btnW = 220;
+    const btnH = 26;
+    // Button background
+    const btnGrad = doc.linearGradient(btnX, btnY, btnX + btnW, btnY);
+    btnGrad.stop(0, '#0ea5e9');
+    btnGrad.stop(1, '#10b981');
+    doc.roundedRect(btnX, btnY, btnW, btnH, 6).fill(btnGrad);
+    // Button label
+    doc.fillColor('#ffffff')
+       .font('Helvetica-Bold')
+       .fontSize(10)
+       .text('Pay Final Amount Online', btnX, btnY + 8, { width: btnW, align: 'center' });
+    // Clickable area
+    doc.link(btnX, btnY, btnW, btnH, invoiceData.stripePaymentUrl);
+  }
 
       // Notes section (if exists, make it more compact)
-      let notesSectionY = paymentSectionY + 80;
+      let notesSectionY = paymentSectionY + (invoiceData.stripePaymentUrl ? 120 : 80);
       if (invoiceData.notes) {
         doc.fillColor(primaryColor)
            .fontSize(12)
@@ -1140,13 +1190,70 @@ router.put('/:id/status', verifyToken, async (req, res) => {
 
     await admin.firestore().collection('invoices').doc(id).update(updateData);
 
-    // If status is 'SENT', send email with PDF
-    if (status === 'SENT' && invoiceData.status !== 'SENT') {
+  // If status is 'SENT', send email with PDF
+  if (status === 'SENT' && invoiceData.status !== 'SENT') {
       try {
-        const pdfBuffer = await generateInvoicePDF(invoiceData);
-        
-        // Send email with PDF attachment
-        await emailService.sendInvoiceEmail(invoiceData, pdfBuffer);
+      // Create Stripe FINAL payment link when enabled
+      let stripePaymentUrl = invoiceData.stripePaymentUrl || null;
+      try {
+        const ownerSnap = await admin.firestore().collection('users').doc(actualHallOwnerId).get();
+        const pm = ownerSnap.exists ? (ownerSnap.data().paymentMethods || {}) : {};
+        const stripeEnabled = Boolean(pm.stripe);
+        const amountToPay = Number(invoiceData.depositPaid > 0 ? (invoiceData.finalTotal ?? 0) : (invoiceData.total ?? 0));
+        if (stripeEnabled && amountToPay > 0) {
+          const url = await createFinalCheckoutLink({
+            hallOwnerId: actualHallOwnerId,
+            bookingId: invoiceData.bookingId,
+            invoiceId: id,
+            invoiceNumber: invoiceData.invoiceNumber,
+            bookingCode: invoiceData.bookingCode,
+            customerName: invoiceData.customer?.name,
+            hallName: invoiceData.resource,
+            finalAmount: amountToPay,
+            stripeAccountId: ownerSnap.exists ? ownerSnap.data().stripeAccountId : undefined
+          });
+          if (url) {
+            stripePaymentUrl = url;
+            await admin.firestore().collection('invoices').doc(id).update({
+              stripePaymentUrl: url,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+            // Also attach to booking.payment_details
+            if (invoiceData.bookingId) {
+              try {
+                const bookingRef = admin.firestore().collection('bookings').doc(invoiceData.bookingId);
+                const snap = await bookingRef.get();
+                if (snap.exists) {
+                  const pd = Object.assign({}, snap.data().payment_details || {});
+                  pd.stripe_payment_url_final = url;
+                  await bookingRef.update({ 
+                    payment_details: pd, 
+                    stripePaymentUrlFinal: url,
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp() 
+                  });
+                }
+              } catch (e) {
+                console.warn('Failed to save final Stripe link on booking (non-blocking):', e?.message || e);
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('Stripe FINAL link generation skipped:', e?.message || e);
+      }
+
+      const processed = {
+        ...invoiceData,
+        stripePaymentUrl,
+        issueDate: invoiceData.issueDate?.toDate?.() || new Date(),
+        dueDate: invoiceData.dueDate?.toDate?.() || new Date(),
+        createdAt: invoiceData.createdAt?.toDate?.() || new Date(),
+        updatedAt: new Date()
+      };
+      const pdfBuffer = await generateInvoicePDF(processed);
+      
+      // Send email with PDF attachment
+      await emailService.sendInvoiceEmail(processed, pdfBuffer);
         console.log('Invoice email sent successfully to:', invoiceData.customer.email);
       } catch (emailError) {
         console.error('Failed to send invoice email:', emailError);

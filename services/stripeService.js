@@ -110,8 +110,99 @@ async function createDepositCheckoutLink({ hallOwnerId, bookingId, bookingCode, 
   }
 }
 
+/**
+ * Create a Stripe Checkout Session link for a FINAL payment.
+ * - Uses the hall owner's connected account via stripeAccountId stored on users doc
+ * - Amount is expected in AUD dollars (will be converted to cents)
+ */
+async function createFinalCheckoutLink({ hallOwnerId, bookingId, invoiceId, invoiceNumber, bookingCode, customerName, hallName, finalAmount, stripeAccountId }) {
+  try {
+    if (!stripe) {
+      console.warn('Stripe client not initialized. Did you set STRIPE_SECRET_KEY?');
+      return null;
+    }
+    const amountNum = Number(finalAmount);
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+      console.warn('Stripe link skipped: invalid final amount', { finalAmount });
+      return null;
+    }
+
+    // Fetch hall owner's Stripe account ID unless provided
+    let connectedAccountId = stripeAccountId;
+    if (!connectedAccountId) {
+      const ownerSnap = await admin.firestore().collection('users').doc(hallOwnerId).get();
+      const ownerData = ownerSnap.exists ? ownerSnap.data() : null;
+      connectedAccountId = ownerData?.stripeAccountId;
+    }
+    if (!connectedAccountId) {
+      console.warn('No stripeAccountId for hall owner', hallOwnerId);
+      return null;
+    }
+
+    const siteUrl = process.env.PUBLIC_SITE_URL || 'http://localhost:5173';
+    const successUrl = `${siteUrl}/booknow?bookingId=${encodeURIComponent(bookingId)}&invoiceId=${encodeURIComponent(invoiceId)}&payment=success`;
+    const cancelUrl = `${siteUrl}/booknow?bookingId=${encodeURIComponent(bookingId)}&invoiceId=${encodeURIComponent(invoiceId)}&payment=cancel`;
+
+    const lineItem = {
+      price_data: {
+        currency: 'aud',
+        unit_amount: Math.round(amountNum * 100),
+        product_data: {
+          name: `Final payment for ${invoiceNumber || bookingCode || bookingId}`,
+          description: hallName ? `Venue: ${hallName}${customerName ? ` • Customer: ${customerName}` : ''}` : (customerName || undefined),
+        },
+      },
+      quantity: 1,
+    };
+
+    const platformFeePct = Number(process.env.PLATFORM_FEE_PCT || 0);
+    const applicationFeeAmount = Number.isFinite(platformFeePct) && platformFeePct > 0
+      ? Math.floor(Math.round(amountNum * 100) * (platformFeePct / 100))
+      : undefined;
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      payment_method_types: ['card'],
+      line_items: [lineItem],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      client_reference_id: invoiceId,
+      metadata: {
+        bookingId,
+        hallOwnerId,
+        invoiceId,
+        invoiceNumber: invoiceNumber || '',
+        purpose: 'final',
+      },
+      payment_intent_data: {
+        transfer_data: { destination: connectedAccountId },
+        ...(applicationFeeAmount ? { application_fee_amount: applicationFeeAmount } : {}),
+        metadata: {
+          bookingId,
+          hallOwnerId,
+          invoiceId,
+          invoiceNumber: invoiceNumber || '',
+          purpose: 'final',
+        }
+      }
+    });
+
+    const url = session?.url || null;
+    if (!url) {
+      console.warn('Stripe session created but no URL returned');
+    } else {
+      console.log('Stripe FINAL checkout URL created', { invoiceId, url });
+    }
+    return url;
+  } catch (err) {
+    console.error('Failed to create Stripe FINAL checkout session:', err?.message || err);
+    return null;
+  }
+}
+
 module.exports = {
   createDepositCheckoutLink,
+  createFinalCheckoutLink,
   /**
    * Retrieve basic status of a connected account for diagnostics.
    */
