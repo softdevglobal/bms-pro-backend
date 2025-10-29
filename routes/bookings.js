@@ -343,6 +343,19 @@ router.post('/admin', verifyToken, async (req, res) => {
       calculatedPrice = estimatedPrice || 0;
     }
 
+    // Admin override: if an estimated price is provided, it becomes the final bill price
+    if (estimatedPrice !== undefined && estimatedPrice !== null && !Number.isNaN(Number(estimatedPrice))) {
+      const manual = Number(estimatedPrice);
+      const auto = Number(calculatedPrice || 0);
+      priceDetails = {
+        ...(priceDetails || {}),
+        adminOverride: true,
+        adminEstimatedPrice: manual,
+        autoCalculatedPrice: auto
+      };
+      calculatedPrice = manual;
+    }
+
     // Create booking data
     const bookingCode = await generateUniqueBookingCode(admin.firestore(), bookingDate);
     const bookingData = {
@@ -1593,8 +1606,16 @@ router.put('/:id', verifyToken, async (req, res) => {
       updateData.endTime = newEndTime;
     }
 
-    // Optionally recalc price when core changed
-    if (coreChanged) {
+    // Apply admin manual override if provided; otherwise optionally recalc when core changed
+    if (estimatedPrice !== undefined) {
+      const manual = Number(estimatedPrice) || 0;
+      updateData.calculatedPrice = manual;
+      updateData.priceDetails = {
+        ...(existing.priceDetails || {}),
+        adminOverride: true,
+        adminEstimatedPrice: manual
+      };
+    } else if (coreChanged) {
       try {
         let calculatedPrice = existing.calculatedPrice || 0;
         let priceDetails = existing.priceDetails || null;
@@ -1630,7 +1651,6 @@ router.put('/:id', verifyToken, async (req, res) => {
         updateData.priceDetails = priceDetails;
       } catch (priceErr) {
         console.error('Price recalculation failed (non-blocking):', priceErr.message);
-        if (estimatedPrice !== undefined) updateData.calculatedPrice = estimatedPrice || 0;
       }
     }
 
