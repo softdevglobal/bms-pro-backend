@@ -108,6 +108,54 @@ router.post('/', async (req, res) => {
 			console.warn('Stripe webhook persist failed (non-blocking):', persistErr && persistErr.message ? persistErr.message : persistErr);
 		}
 
+    // Helper: mark a booking's deposit as paid (idempotent)
+    async function markDepositPaid({ bookingId, hallOwnerId, amountTotalCents, currency, session, paymentIntentId }) {
+      try {
+        if (!bookingId) return;
+        const bookingRef = admin.firestore().collection('bookings').doc(bookingId);
+        const snap = await bookingRef.get();
+        if (!snap.exists) return;
+
+        const data = snap.data();
+        const paymentDetails = Object.assign({}, data.payment_details || {});
+
+        // Idempotency: if already marked paid, skip heavy work
+        if (paymentDetails.deposit_paid === true) return;
+
+        const paidAmount = Number.isFinite(Number(amountTotalCents)) ? Math.round(Number(amountTotalCents)) / 100 : undefined;
+        paymentDetails.deposit_paid = true;
+        paymentDetails.paid_at = admin.firestore.FieldValue.serverTimestamp();
+        if (paidAmount !== undefined) paymentDetails.deposit_paid_amount = paidAmount;
+        if (currency) paymentDetails.deposit_currency = String(currency).toLowerCase();
+        if (session && session.id) paymentDetails.deposit_stripe_session_id = session.id;
+        const intentId = paymentIntentId || (session && session.payment_intent) || null;
+        if (intentId) paymentDetails.deposit_stripe_payment_intent = intentId;
+
+        await bookingRef.update({ payment_details: paymentDetails, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+
+        // Best-effort: create a payment record for deposits
+        try {
+          if (paidAmount && paidAmount > 0) {
+            await admin.firestore().collection('payments').add({
+              bookingId: bookingId,
+              hallOwnerId: hallOwnerId || data.hallOwnerId || null,
+              amount: paidAmount,
+              paymentMethod: 'Stripe',
+              reference: intentId || (session && session.id) || 'stripe',
+              notes: 'Stripe deposit payment',
+              processedAt: admin.firestore.FieldValue.serverTimestamp(),
+              processedBy: 'stripe',
+              createdAt: admin.firestore.FieldValue.serverTimestamp()
+            });
+          }
+        } catch (e) {
+          console.warn('Failed to create payment record for Stripe deposit (non-blocking):', e?.message || e);
+        }
+      } catch (e) {
+        console.error('Failed to mark deposit paid:', e);
+      }
+    }
+
     // Handle both sync and async payment confirmations
     switch (event.type) {
       case 'checkout.session.completed': {
@@ -119,29 +167,16 @@ router.post('/', async (req, res) => {
         const invoiceId = session?.metadata?.invoiceId;
         const hallOwnerId = session?.metadata?.hallOwnerId;
 
-        if (bookingId) {
-          try {
-            const update = {
-              updatedAt: admin.firestore.FieldValue.serverTimestamp()
-            };
-
-            // Mark deposit as paid if stored in unified payment_details
-            update['payment_details'] = admin.firestore.FieldValue.arrayUnion(); // no-op placeholder to ensure object path below
-            delete update['payment_details'];
-
-            // Read booking to decide how to set fields safely
-            const bookingRef = admin.firestore().collection('bookings').doc(bookingId);
-            const snap = await bookingRef.get();
-            if (snap.exists) {
-              const data = snap.data();
-              const paymentDetails = Object.assign({}, data.payment_details || {});
-              paymentDetails.deposit_paid = true;
-              paymentDetails.paid_at = admin.firestore.FieldValue.serverTimestamp();
-              await bookingRef.update({ payment_details: paymentDetails, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-            }
-          } catch (e) {
-            console.error('Failed to mark deposit paid:', e);
-          }
+        // For DEPOSIT sessions, mark deposit as paid
+        if (purpose !== 'final' && bookingId) {
+          await markDepositPaid({
+            bookingId,
+            hallOwnerId,
+            amountTotalCents: session?.amount_total,
+            currency: session?.currency,
+            session,
+            paymentIntentId: session?.payment_intent
+          });
         }
 
         // Handle FINAL invoice payments
@@ -205,23 +240,35 @@ router.post('/', async (req, res) => {
 
         break;
       }
+      case 'payment_intent.succeeded': {
+        const intent = event.data.object;
+        const purpose = intent?.metadata?.purpose;
+        if (purpose === 'deposit') {
+          const bookingId = intent?.metadata?.bookingId;
+          const hallOwnerId = intent?.metadata?.hallOwnerId;
+          await markDepositPaid({
+            bookingId,
+            hallOwnerId,
+            amountTotalCents: intent?.amount,
+            currency: intent?.currency,
+            session: null,
+            paymentIntentId: intent?.id
+          });
+        }
+        break;
+      }
       case 'checkout.session.async_payment_succeeded': {
         const session = event.data.object;
         const bookingId = session?.metadata?.bookingId;
-        if (bookingId) {
-          try {
-            const bookingRef = admin.firestore().collection('bookings').doc(bookingId);
-            const snap = await bookingRef.get();
-            if (snap.exists) {
-              const data = snap.data();
-              const paymentDetails = Object.assign({}, data.payment_details || {});
-              paymentDetails.deposit_paid = true;
-              paymentDetails.paid_at = admin.firestore.FieldValue.serverTimestamp();
-              await bookingRef.update({ payment_details: paymentDetails, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-            }
-          } catch (e) {
-            console.error('Failed to mark deposit paid (async succeeded):', e);
-          }
+        if (bookingId && session?.metadata?.purpose !== 'final') {
+          await markDepositPaid({
+            bookingId,
+            hallOwnerId: session?.metadata?.hallOwnerId,
+            amountTotalCents: session?.amount_total,
+            currency: session?.currency,
+            session,
+            paymentIntentId: session?.payment_intent
+          });
         }
         break;
       }
