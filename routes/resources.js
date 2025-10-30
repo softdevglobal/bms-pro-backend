@@ -1,41 +1,10 @@
 const express = require('express');
 const admin = require('../firebaseAdmin');
+const { verifyToken } = require('../middleware/authMiddleware');
 
 const router = express.Router();
 
-// Middleware to verify token
-const verifyToken = async (req, res, next) => {
-  try {
-    const authHeader = req.headers.authorization;
-    console.log('Authorization header:', authHeader);
-    
-    const token = authHeader?.split(' ')[1];
-    if (!token) {
-      console.log('No token provided');
-      return res.status(401).json({ message: 'No token provided' });
-    }
-
-    console.log('Token received:', token.substring(0, 20) + '...');
-    
-    // Try to verify as JWT first, then Firebase token
-    try {
-      const jwt = require('jsonwebtoken');
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-      console.log('JWT decoded:', decoded);
-      req.user = decoded;
-      next();
-    } catch (jwtError) {
-      console.log('JWT verification failed, trying Firebase token:', jwtError.message);
-      const decodedToken = await admin.auth().verifyIdToken(token);
-      console.log('Firebase token decoded:', decodedToken);
-      req.user = decodedToken;
-      next();
-    }
-  } catch (error) {
-    console.error('Token verification error:', error);
-    res.status(401).json({ message: 'Invalid token' });
-  }
-};
+// use shared auth middleware
 
 // Generate unique resource code
 const generateResourceCode = async (hallOwnerId) => {

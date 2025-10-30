@@ -1,5 +1,6 @@
 const express = require('express');
 const admin = require('../firebaseAdmin');
+const { verifyToken } = require('../middleware/authMiddleware');
 const emailService = require('../services/emailService');
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
@@ -366,30 +367,7 @@ async function generateQuotationPDF(quotationData) {
   });
 }
 
-// Middleware to verify token
-const verifyToken = async (req, res, next) => {
-  try {
-    const authHeader = req.headers.authorization;
-    const token = authHeader?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({ message: 'No token provided' });
-    }
-
-    try {
-      const jwt = require('jsonwebtoken');
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-      req.user = decoded;
-      next();
-    } catch (jwtError) {
-      const decodedToken = await admin.auth().verifyIdToken(token);
-      req.user = decodedToken;
-      next();
-    }
-  } catch (error) {
-    console.error('Token verification error:', error);
-    res.status(401).json({ message: 'Invalid token' });
-  }
-};
+// use shared auth middleware
 
 // POST /api/quotations - Create a new quotation
 router.post('/', verifyToken, async (req, res) => {

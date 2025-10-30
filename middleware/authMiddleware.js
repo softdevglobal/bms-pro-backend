@@ -1,88 +1,63 @@
 const admin = require('../firebaseAdmin');
 
-// Middleware to verify token
+function parseTokenHeader(token) {
+  try {
+    const headerB64 = token.split('.')[0];
+    const padded = headerB64.replace(/-/g, '+').replace(/_/g, '/');
+    const json = Buffer.from(padded, 'base64').toString('utf8');
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+// Middleware to verify token (HS256 JWT first; only try Firebase for RS256 w/ kid)
 const verifyToken = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
-    console.log('Authorization header:', authHeader);
-    
-    const token = authHeader?.split(' ')[1];
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
     if (!token) {
-      console.log('No token provided');
       return res.status(401).json({ message: 'No token provided' });
     }
 
-    console.log('Token received:', token.substring(0, 20) + '...');
-    
-    // Try to verify as JWT first
+    const jwt = require('jsonwebtoken');
+
+    // Attempt HS256 JWT verification first
     try {
-      const jwt = require('jsonwebtoken');
       const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-      console.log('JWT decoded:', decoded);
       req.user = decoded;
-      next();
+      return next();
     } catch (jwtError) {
-      console.log('JWT verification failed:', jwtError.message);
-      
-      // Check if it's an expired token error
+      // Expired -> explicit message
       if (jwtError.name === 'TokenExpiredError') {
-        console.log('Token has expired');
-        return res.status(401).json({ 
-          message: 'Token has expired', 
-          code: 'TOKEN_EXPIRED' 
-        });
+        return res.status(401).json({ message: 'Token has expired', code: 'TOKEN_EXPIRED' });
       }
-      
-      // Check if it's a malformed token
-      if (jwtError.name === 'JsonWebTokenError') {
-        console.log('Invalid JWT token format');
-        return res.status(401).json({ 
-          message: 'Invalid token format', 
-          code: 'INVALID_TOKEN' 
-        });
+
+      // If token looks like HS* (no kid or alg HS*), treat as invalid rather than trying Firebase
+      const header = parseTokenHeader(token);
+      const alg = header?.alg || '';
+      const hasKid = Boolean(header?.kid);
+      const isLikelyFirebase = hasKid || alg === 'RS256';
+
+      if (!isLikelyFirebase) {
+        return res.status(401).json({ message: 'Invalid token', code: 'INVALID_TOKEN' });
       }
-      
-      // For other JWT errors, try Firebase token verification
+
+      // Try Firebase only for RS256 tokens with kid
       try {
-        console.log('Trying Firebase token verification...');
         const decodedToken = await admin.auth().verifyIdToken(token);
-        console.log('Firebase token decoded:', decodedToken);
         req.user = decodedToken;
-        next();
+        return next();
       } catch (firebaseError) {
-        console.log('Firebase token verification failed:', firebaseError.message);
-        
-        // Handle specific Firebase errors
-        if (firebaseError.code === 'auth/argument-error') {
-          return res.status(401).json({ 
-            message: 'Invalid Firebase token format', 
-            code: 'INVALID_FIREBASE_TOKEN' 
-          });
-        }
-        
         if (firebaseError.code === 'auth/id-token-expired') {
-          return res.status(401).json({ 
-            message: 'Firebase token has expired', 
-            code: 'FIREBASE_TOKEN_EXPIRED' 
-          });
+          return res.status(401).json({ message: 'Firebase token has expired', code: 'FIREBASE_TOKEN_EXPIRED' });
         }
-        
-        // Generic error for other Firebase issues
-        return res.status(401).json({ 
-          message: 'Token verification failed', 
-          code: 'TOKEN_VERIFICATION_FAILED' 
-        });
+        return res.status(401).json({ message: 'Token verification failed', code: 'TOKEN_VERIFICATION_FAILED' });
       }
     }
   } catch (error) {
-    console.error('Token verification error:', error);
-    res.status(401).json({ 
-      message: 'Authentication failed', 
-      code: 'AUTH_FAILED' 
-    });
+    return res.status(401).json({ message: 'Authentication failed', code: 'AUTH_FAILED' });
   }
 };
 
-module.exports = {
-  verifyToken
-};
+module.exports = { verifyToken };
