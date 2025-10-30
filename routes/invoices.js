@@ -271,7 +271,7 @@ async function tryGenerateHtmlPDF(invoiceData) {
         // ignore enrichment errors; proceed without bookingCode
       }
     }
-    const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox','--disable-setuid-sandbox'] });
+    const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox','--disable-setuid-sandbox'], executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined });
     const page = await browser.newPage();
     const html = buildInvoiceHTML(invoiceData);
     await page.setContent(html, { waitUntil: 'networkidle0' });
