@@ -36,10 +36,9 @@ const verifyToken = async (req, res, next) => {
       // If token looks like HS* (no kid or alg HS*), treat as invalid rather than trying Firebase
       const header = parseTokenHeader(token);
       const alg = header?.alg || '';
-      const hasKid = Boolean(header?.kid);
-      const isLikelyFirebase = hasKid || alg === 'RS256';
+      const isFirebaseCandidate = Boolean(header?.kid) && alg === 'RS256';
 
-      if (!isLikelyFirebase) {
+      if (!isFirebaseCandidate) {
         return res.status(401).json({ message: 'Invalid token', code: 'INVALID_TOKEN' });
       }
 
