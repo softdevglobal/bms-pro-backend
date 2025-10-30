@@ -131,7 +131,7 @@ router.post('/', async (req, res) => {
         const intentId = paymentIntentId || (session && session.payment_intent) || null;
         if (intentId) paymentDetails.deposit_stripe_payment_intent = intentId;
 
-        await bookingRef.update({ payment_details: paymentDetails, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+        await bookingRef.update({ payment_details: paymentDetails, payment_success: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
 
         // Best-effort: create a payment record for deposits
         try {
@@ -153,6 +153,67 @@ router.post('/', async (req, res) => {
         }
       } catch (e) {
         console.error('Failed to mark deposit paid:', e);
+      }
+    }
+
+    // Helper: mark a FINAL invoice as paid and reflect on booking (idempotent-ish)
+    async function markFinalInvoicePaid({ invoiceId, referenceId, session }) {
+      try {
+        if (!invoiceId) return;
+        const invRef = admin.firestore().collection('invoices').doc(invoiceId);
+        const invSnap = await invRef.get();
+        if (!invSnap.exists) return;
+        const inv = invSnap.data();
+
+        const amountPaid = Number(inv.depositPaid > 0 ? (inv.finalTotal ?? 0) : (inv.total ?? 0));
+        await invRef.update({
+          paidAmount: amountPaid,
+          status: 'PAID',
+          payment_success: true,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        // Reflect final payment on related booking
+        if (inv.bookingId) {
+          try {
+            const bookingRef = admin.firestore().collection('bookings').doc(inv.bookingId);
+            const snap = await bookingRef.get();
+            if (snap.exists) {
+              const data = snap.data();
+              const paymentDetails = Object.assign({}, data.payment_details || {});
+              paymentDetails.final_paid = true;
+              paymentDetails.final_paid_amount = amountPaid;
+              paymentDetails.final_paid_at = admin.firestore.FieldValue.serverTimestamp();
+              if (session && session.id) paymentDetails.final_stripe_session_id = session.id;
+              if (referenceId) paymentDetails.final_stripe_payment_intent = referenceId;
+              paymentDetails.final_due = 0;
+              await bookingRef.update({ payment_details: paymentDetails, payment_success: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+            }
+          } catch (e) {
+            console.error('Failed to write final payment details to booking:', e?.message || e);
+          }
+        }
+
+        // Create a payment record entry
+        try {
+          await admin.firestore().collection('payments').add({
+            invoiceId: invoiceId,
+            invoiceNumber: inv.invoiceNumber,
+            bookingId: inv.bookingId,
+            hallOwnerId: inv.hallOwnerId,
+            amount: amountPaid,
+            paymentMethod: 'Stripe',
+            reference: referenceId || (session && session.id) || 'stripe',
+            notes: 'Stripe final payment',
+            processedAt: admin.firestore.FieldValue.serverTimestamp(),
+            processedBy: 'stripe',
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+        } catch (e) {
+          console.warn('Failed to create payment record for Stripe final payment (non-blocking):', e?.message || e);
+        }
+      } catch (e) {
+        console.error('Failed to mark FINAL invoice paid:', e?.message || e);
       }
     }
 
@@ -181,61 +242,7 @@ router.post('/', async (req, res) => {
 
         // Handle FINAL invoice payments
         if (purpose === 'final' && invoiceId) {
-          try {
-            const invRef = admin.firestore().collection('invoices').doc(invoiceId);
-            const invSnap = await invRef.get();
-            if (invSnap.exists) {
-              const inv = invSnap.data();
-              const amountPaid = Number(inv.depositPaid > 0 ? (inv.finalTotal ?? 0) : (inv.total ?? 0));
-              await invRef.update({
-                paidAmount: amountPaid,
-                status: 'PAID',
-                updatedAt: admin.firestore.FieldValue.serverTimestamp()
-              });
-
-              // Also save final payment details on the related booking document
-              if (inv.bookingId) {
-                try {
-                  const bookingRef = admin.firestore().collection('bookings').doc(inv.bookingId);
-                  const snap = await bookingRef.get();
-                  if (snap.exists) {
-                    const data = snap.data();
-                    const paymentDetails = Object.assign({}, data.payment_details || {});
-                    paymentDetails.final_paid = true;
-                    paymentDetails.final_paid_amount = amountPaid;
-                    paymentDetails.final_paid_at = admin.firestore.FieldValue.serverTimestamp();
-                    paymentDetails.final_stripe_session_id = session.id || null;
-                    paymentDetails.final_stripe_payment_intent = session.payment_intent || null;
-                    paymentDetails.final_due = 0;
-                    await bookingRef.update({ payment_details: paymentDetails, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-                  }
-                } catch (e) {
-                  console.error('Failed to write final payment details to booking:', e?.message || e);
-                }
-              }
-
-              // Create a payment record for Stripe final payment
-              try {
-                await admin.firestore().collection('payments').add({
-                  invoiceId: invoiceId,
-                  invoiceNumber: inv.invoiceNumber,
-                  bookingId: inv.bookingId,
-                  hallOwnerId: inv.hallOwnerId,
-                  amount: amountPaid,
-                  paymentMethod: 'Stripe',
-                  reference: session.payment_intent || session.id || 'stripe',
-                  notes: 'Stripe final payment',
-                  processedAt: admin.firestore.FieldValue.serverTimestamp(),
-                  processedBy: 'stripe',
-                  createdAt: admin.firestore.FieldValue.serverTimestamp()
-                });
-              } catch (e) {
-                console.warn('Failed to create payment record for Stripe final payment (non-blocking):', e?.message || e);
-              }
-            }
-          } catch (e) {
-            console.error('Failed to mark FINAL invoice paid:', e?.message || e);
-          }
+          await markFinalInvoicePaid({ invoiceId, referenceId: session?.payment_intent || null, session });
         }
 
         break;
@@ -254,6 +261,9 @@ router.post('/', async (req, res) => {
             session: null,
             paymentIntentId: intent?.id
           });
+        } else if (purpose === 'final') {
+          const invoiceId = intent?.metadata?.invoiceId;
+          await markFinalInvoicePaid({ invoiceId, referenceId: intent?.id || null, session: null });
         }
         break;
       }
