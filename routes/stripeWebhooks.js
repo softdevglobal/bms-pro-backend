@@ -23,6 +23,10 @@ router.post('/', async (req, res) => {
   try {
     if (!stripe) return res.status(500).send('Stripe not configured');
     const sig = req.headers['stripe-signature'];
+    if (!sig) {
+      console.warn('[Stripe Webhook] missing stripe-signature header');
+      return res.status(400).send('Missing Stripe signature');
+    }
     const connectSecret = process.env.STRIPE_CONNECT_WEBHOOK_SECRET;
     const platformSecret = process.env.STRIPE_WEBHOOK_SECRET;
     let event;

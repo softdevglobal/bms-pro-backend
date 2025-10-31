@@ -10,6 +10,7 @@ app.use(cors());
 // Mount raw body for Stripe webhooks before JSON parser on that route
 const stripeWebhooks = require('./routes/stripeWebhooks');
 app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), stripeWebhooks);
+console.log('Stripe webhook route ready at /api/webhooks/stripe');
 app.use(express.json());
 app.use(captureIP); // Capture IP addresses for all requests
 
