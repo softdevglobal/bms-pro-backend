@@ -40,6 +40,20 @@ class EmailService {
     }
   }
 
+  // Fetch hall owner's display name (hall/venue name)
+  async getHallOwnerName(hallOwnerId) {
+    try {
+      if (!hallOwnerId) return 'Your Venue';
+      const userDoc = await admin.firestore().collection('users').doc(hallOwnerId).get();
+      if (!userDoc.exists) return 'Your Venue';
+      const data = userDoc.data() || {};
+      return data.hallName || data.businessName || data.displayName || 'Your Venue';
+    } catch (e) {
+      console.warn('Error fetching hall owner name:', e?.message || e);
+      return 'Your Venue';
+    }
+  }
+
   // Fetch hall owner's accepted payment methods with sensible defaults
   async getHallOwnerPaymentMethods(hallOwnerId) {
     try {
@@ -148,18 +162,20 @@ class EmailService {
   }
 
   async generateEmailContent(type, title, message, data, hallOwnerId = null) {
-    const baseTemplate = {
-      subject: `Cranbourne Public Hall - ${title}`,
+    const hallName = await this.getHallOwnerName(hallOwnerId);
+    return {
+      subject: `${hallName} - ${title}`,
       text: message,
       html: await this.generateHTMLTemplate(type, title, message, data, hallOwnerId)
     };
-
-    return baseTemplate;
   }
 
   async generateHTMLTemplate(type, title, message, data, hallOwnerId = null) {
-    // Fetch company logo from database
-    const logoUrl = await this.getHallOwnerLogo(hallOwnerId);
+    // Fetch company branding from database
+    const [logoUrl, hallName] = await Promise.all([
+      this.getHallOwnerLogo(hallOwnerId),
+      this.getHallOwnerName(hallOwnerId)
+    ]);
     
     let actionButton = '';
     let bookingDetails = '';
@@ -386,13 +402,13 @@ class EmailService {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Cranbourne Public Hall - ${title}</title>
+        <title>${hallName} - ${title}</title>
       </head>
       <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f1f5f9;">
         <div style="max-width: 600px; margin: 0 auto; background-color: white; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
           <!-- Header (no logo for booking/submission style notifications) -->
           <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); padding: 40px 20px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 24px; font-weight: 600;">Cranbourne Public Hall</h1>
+            <h1 style="color: white; margin: 0; font-size: 24px; font-weight: 600;">${hallName}</h1>
           </div>
           
           <!-- Content -->
@@ -410,7 +426,7 @@ class EmailService {
             
             <div style="border-top: 1px solid #e2e8f0; margin-top: 40px; padding-top: 30px; text-align: center;">
               <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0;">
-                Thank you for choosing Cranbourne Public Hall!
+                Thank you for choosing ${hallName}!
               </p>
               <p style="color: #64748b; font-size: 14px; margin: 0;">
                 If you have any questions, please don't hesitate to contact us.
@@ -421,7 +437,7 @@ class EmailService {
           <!-- Footer -->
           <div style="background-color: #f8fafc; padding: 30px; text-align: center; border-top: 1px solid #e2e8f0;">
             <p style="color: #64748b; font-size: 12px; margin: 0 0 10px 0;">
-              Cranbourne Public Hall Management System
+              ${hallName} Management System
             </p>
             <p style="color: #64748b; font-size: 12px; margin: 0;">
               This is an automated notification. Please do not reply to this email.
@@ -472,7 +488,10 @@ class EmailService {
   }
 
   async generateCustomizedEmailContent({ subject, body, recipientName, bookingId, templateName, isCustom, hallOwnerId }) {
-    const logoUrl = await this.getHallOwnerLogo(hallOwnerId);
+    const [logoUrl, hallName] = await Promise.all([
+      this.getHallOwnerLogo(hallOwnerId),
+      this.getHallOwnerName(hallOwnerId)
+    ]);
     
     // Create a more flexible template for customized emails
     const htmlContent = `
@@ -481,14 +500,14 @@ class EmailService {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Cranbourne Public Hall - ${subject}</title>
+        <title>${hallName} - ${subject}</title>
       </head>
       <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f1f5f9;">
         <div style="max-width: 600px; margin: 0 auto; background-color: white; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
           <!-- Header -->
           <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); padding: 40px 20px; text-align: center;">
-            <img src="${logoUrl}" alt="Cranbourne Public Hall" draggable="false" style="max-width: 120px; height: auto; -webkit-user-drag: none; user-select: none; pointer-events: none;">
-            <h1 style="color: white; margin: 20px 0 0 0; font-size: 24px; font-weight: 600;">Cranbourne Public Hall</h1>
+            <img src="${logoUrl}" alt="${hallName}" draggable="false" style="max-width: 120px; height: auto; -webkit-user-drag: none; user-select: none; pointer-events: none;">
+            <h1 style="color: white; margin: 20px 0 0 0; font-size: 24px; font-weight: 600;">${hallName}</h1>
           </div>
           
           <!-- Content -->
@@ -501,7 +520,7 @@ class EmailService {
             
             <div style="border-top: 1px solid #e2e8f0; margin-top: 40px; padding-top: 30px; text-align: center;">
               <p style="color: #64748b; font-size: 14px; margin: 0 0 10px 0;">
-                Thank you for choosing Cranbourne Public Hall!
+                Thank you for choosing ${hallName}!
               </p>
               <p style="color: #64748b; font-size: 14px; margin: 0;">
                 If you have any questions, please don't hesitate to contact us.
@@ -512,7 +531,7 @@ class EmailService {
           <!-- Footer -->
           <div style="background-color: #f8fafc; padding: 30px; text-align: center; border-top: 1px solid #e2e8f0;">
             <p style="color: #64748b; font-size: 12px; margin: 0 0 10px 0;">
-              Cranbourne Public Hall Management System
+              ${hallName} Management System
             </p>
             <p style="color: #64748b; font-size: 12px; margin: 0;">
               ${isCustom ? 'This is a custom message from our team.' : `Template: ${templateName || 'Custom'}`}
@@ -524,7 +543,7 @@ class EmailService {
     `;
 
     return {
-      subject: `Cranbourne Public Hall - ${subject}`,
+      subject: `${hallName} - ${subject}`,
       text: body,
       html: htmlContent
     };
