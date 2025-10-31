@@ -1,6 +1,7 @@
 const express = require('express');
 const admin = require('../firebaseAdmin');
 const { verifyToken } = require('../middleware/authMiddleware');
+const Stripe = require('stripe');
 
 const router = express.Router();
 
@@ -376,3 +377,105 @@ router.delete('/:id', verifyToken, async (req, res) => {
 });
 
 module.exports = router;
+
+/**
+ * POST /api/payments/reconcile-final
+ * Body: { invoiceId: string, sessionId?: string, paymentIntentId?: string }
+ * - Verifies payment with Stripe (via session or intent) and, if succeeded,
+ *   marks the invoice as PAID, updates the related booking's payment_details.final_*,
+ *   and creates a payment record. Mirrors webhook behavior as a manual fallback.
+ */
+router.post('/reconcile-final', verifyToken, async (req, res) => {
+  try {
+    const { invoiceId, sessionId, paymentIntentId } = req.body || {};
+    if (!invoiceId) return res.status(400).json({ message: 'invoiceId is required' });
+
+    // Initialize Stripe
+    const secretKey = process.env.STRIPE_SECRET_KEY;
+    if (!secretKey) return res.status(500).json({ message: 'Stripe not configured' });
+    const stripe = new Stripe(secretKey);
+
+    // Load invoice, authorize access
+    const invRef = admin.firestore().collection('invoices').doc(invoiceId);
+    const invSnap = await invRef.get();
+    if (!invSnap.exists) return res.status(404).json({ message: 'Invoice not found' });
+    const inv = invSnap.data();
+
+    // Access control (hall_owner or sub_user for same hall)
+    const userDoc = await admin.firestore().collection('users').doc(req.user.uid).get();
+    const userData = userDoc.exists ? userDoc.data() : null;
+    if (!userData) return res.status(404).json({ message: 'User not found' });
+    const requesterHallOwnerId = userData.role === 'sub_user' ? (userData.parentUserId || null) : req.user.uid;
+    if (!requesterHallOwnerId || inv.hallOwnerId !== requesterHallOwnerId) {
+      return res.status(403).json({ message: 'Access denied for this invoice' });
+    }
+
+    // Determine payment reference by validating with Stripe
+    let referenceId = paymentIntentId || null;
+    if (!referenceId && sessionId) {
+      const session = await stripe.checkout.sessions.retrieve(String(sessionId));
+      if (!session) return res.status(400).json({ message: 'Session not found' });
+      if (session.payment_status !== 'paid') return res.status(400).json({ message: `Session not paid (status=${session.payment_status})` });
+      referenceId = session.payment_intent || null;
+    }
+    if (!referenceId) return res.status(400).json({ message: 'Provide sessionId or paymentIntentId' });
+
+    // Verify intent succeeded
+    const intent = await stripe.paymentIntents.retrieve(String(referenceId));
+    if (!intent || intent.status !== 'succeeded') {
+      return res.status(400).json({ message: `PaymentIntent not succeeded (status=${intent && intent.status})` });
+    }
+
+    // Compute amount to mark as paid
+    const amountPaid = Number(inv.depositPaid > 0 ? (inv.finalTotal ?? 0) : (inv.total ?? 0));
+
+    // Apply updates transactionally with reads-before-writes
+    await admin.firestore().runTransaction(async (tx) => {
+      let bookingRef = null;
+      let bookingSnap = null;
+      if (inv.bookingId) {
+        bookingRef = admin.firestore().collection('bookings').doc(inv.bookingId);
+        bookingSnap = await tx.get(bookingRef);
+      }
+
+      // Now perform writes
+      tx.update(invRef, {
+        paidAmount: amountPaid,
+        status: 'PAID',
+        payment_success: true,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+
+      if (bookingSnap && bookingSnap.exists) {
+        const data = bookingSnap.data();
+        const paymentDetails = Object.assign({}, data.payment_details || {});
+        paymentDetails.final_paid = true;
+        paymentDetails.final_paid_amount = amountPaid;
+        paymentDetails.final_paid_at = admin.firestore.FieldValue.serverTimestamp();
+        paymentDetails.final_stripe_payment_intent = referenceId;
+        paymentDetails.final_due = 0;
+        tx.update(bookingRef, { payment_details: paymentDetails, payment_success: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+      }
+    });
+
+    // Create payment record
+    await admin.firestore().collection('payments').add({
+      invoiceId,
+      invoiceNumber: inv.invoiceNumber,
+      bookingId: inv.bookingId || null,
+      hallOwnerId: inv.hallOwnerId,
+      amount: amountPaid,
+      paymentMethod: 'Stripe',
+      reference: referenceId,
+      notes: 'Manual reconcile (final payment)',
+      processedAt: admin.firestore.FieldValue.serverTimestamp(),
+      processedBy: 'stripe',
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    return res.json({ ok: true, invoiceId, referenceId, amountPaid });
+  } catch (err) {
+    console.error('Reconcile final payment failed:', err?.message || err);
+    return res.status(500).json({ message: err?.message || String(err) });
+  }
+});

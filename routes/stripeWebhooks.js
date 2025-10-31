@@ -214,6 +214,15 @@ router.post('/', async (req, res) => {
           const inv = invSnap.data();
           const amountPaid = Number(inv.depositPaid > 0 ? (inv.finalTotal ?? 0) : (inv.total ?? 0));
 
+          // READ all necessary docs BEFORE any writes
+          let bookingRef = null;
+          let bookingSnap = null;
+          if (inv.bookingId) {
+            bookingRef = admin.firestore().collection('bookings').doc(inv.bookingId);
+            bookingSnap = await tx.get(bookingRef);
+          }
+
+          // Now perform WRITES after reads
           tx.update(invRef, {
             paidAmount: amountPaid,
             status: 'PAID',
@@ -221,20 +230,16 @@ router.post('/', async (req, res) => {
             updatedAt: admin.firestore.FieldValue.serverTimestamp()
           });
 
-          if (inv.bookingId) {
-            const bookingRef = admin.firestore().collection('bookings').doc(inv.bookingId);
-            const snap = await tx.get(bookingRef);
-            if (snap.exists) {
-              const data = snap.data();
-              const paymentDetails = Object.assign({}, data.payment_details || {});
-              paymentDetails.final_paid = true;
-              paymentDetails.final_paid_amount = amountPaid;
-              paymentDetails.final_paid_at = admin.firestore.FieldValue.serverTimestamp();
-              if (session && session.id) paymentDetails.final_stripe_session_id = session.id;
-              if (referenceId) paymentDetails.final_stripe_payment_intent = referenceId;
-              paymentDetails.final_due = 0;
-              tx.update(bookingRef, { payment_details: paymentDetails, payment_success: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-            }
+          if (bookingSnap && bookingSnap.exists) {
+            const data = bookingSnap.data();
+            const paymentDetails = Object.assign({}, data.payment_details || {});
+            paymentDetails.final_paid = true;
+            paymentDetails.final_paid_amount = amountPaid;
+            paymentDetails.final_paid_at = admin.firestore.FieldValue.serverTimestamp();
+            if (session && session.id) paymentDetails.final_stripe_session_id = session.id;
+            if (referenceId) paymentDetails.final_stripe_payment_intent = referenceId;
+            paymentDetails.final_due = 0;
+            tx.update(bookingRef, { payment_details: paymentDetails, payment_success: true, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
           }
 
           paymentRecordPayload = {
