@@ -73,7 +73,7 @@ async function createDepositCheckoutLink({ hallOwnerId, bookingId, bookingCode, 
       ? Math.floor(Math.round(amountNum * 100) * (platformFeePct / 100))
       : undefined;
 
-    // Use destination charges so application fees work in live
+    // Direct charges: run on connected account; platform takes application fee
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       payment_method_types: ['card'],
@@ -87,7 +87,6 @@ async function createDepositCheckoutLink({ hallOwnerId, bookingId, bookingCode, 
         purpose: 'deposit',
       },
       payment_intent_data: {
-        transfer_data: { destination: connectedAccountId },
         ...(applicationFeeAmount ? { application_fee_amount: applicationFeeAmount } : {}),
         metadata: {
           bookingId,
@@ -95,7 +94,7 @@ async function createDepositCheckoutLink({ hallOwnerId, bookingId, bookingCode, 
           purpose: 'deposit'
         }
       }
-    });
+    }, { stripeAccount: connectedAccountId });
 
     const url = session?.url || null;
     if (!url) {
@@ -175,7 +174,6 @@ async function createFinalCheckoutLink({ hallOwnerId, bookingId, invoiceId, invo
         purpose: 'final',
       },
       payment_intent_data: {
-        transfer_data: { destination: connectedAccountId },
         ...(applicationFeeAmount ? { application_fee_amount: applicationFeeAmount } : {}),
         metadata: {
           bookingId,
@@ -185,7 +183,7 @@ async function createFinalCheckoutLink({ hallOwnerId, bookingId, invoiceId, invo
           purpose: 'final',
         }
       }
-    });
+    }, { stripeAccount: connectedAccountId });
 
     const url = session?.url || null;
     if (!url) {

@@ -410,10 +410,21 @@ router.post('/reconcile-final', verifyToken, async (req, res) => {
       return res.status(403).json({ message: 'Access denied for this invoice' });
     }
 
+    // Determine payment reference by validating with Stripe (on the connected account)
+    // Fetch connected Stripe account for the hall owner on the invoice
+    const ownerSnap = await admin.firestore().collection('users').doc(inv.hallOwnerId).get();
+    const connectedAccountId = ownerSnap.exists ? (ownerSnap.data()?.stripeAccountId || null) : null;
+    if (!connectedAccountId) {
+      return res.status(400).json({ message: 'Missing connected Stripe account for hall owner' });
+    }
+
+    // Stripe options to scope API calls to the connected account (Direct Charges)
+    const stripeOpts = { stripeAccount: connectedAccountId };
+
     // Determine payment reference by validating with Stripe
     let referenceId = paymentIntentId || null;
     if (!referenceId && sessionId) {
-      const session = await stripe.checkout.sessions.retrieve(String(sessionId));
+      const session = await stripe.checkout.sessions.retrieve(String(sessionId), stripeOpts);
       if (!session) return res.status(400).json({ message: 'Session not found' });
       if (session.payment_status !== 'paid') return res.status(400).json({ message: `Session not paid (status=${session.payment_status})` });
       referenceId = session.payment_intent || null;
@@ -421,7 +432,7 @@ router.post('/reconcile-final', verifyToken, async (req, res) => {
     if (!referenceId) return res.status(400).json({ message: 'Provide sessionId or paymentIntentId' });
 
     // Verify intent succeeded
-    const intent = await stripe.paymentIntents.retrieve(String(referenceId));
+    const intent = await stripe.paymentIntents.retrieve(String(referenceId), stripeOpts);
     if (!intent || intent.status !== 'succeeded') {
       return res.status(400).json({ message: `PaymentIntent not succeeded (status=${intent && intent.status})` });
     }
