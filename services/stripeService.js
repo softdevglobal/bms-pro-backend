@@ -70,8 +70,9 @@ async function createDepositCheckoutLink({ hallOwnerId, bookingId, bookingCode, 
     // Platform fee: default to 0.5% (can override via PLATFORM_FEE_PCT)
     const platformFeePctEnv = process.env.PLATFORM_FEE_PCT;
     const platformFeePct = Number.isFinite(Number(platformFeePctEnv)) ? Number(platformFeePctEnv) : 0.5;
+    const amountCents = Math.round(amountNum * 100);
     const applicationFeeAmount = platformFeePct > 0
-      ? Math.floor(Math.round(amountNum * 100) * (platformFeePct / 100))
+      ? Math.round(amountCents * (platformFeePct / 100))
       : undefined;
 
     // Direct charges: run on connected account; platform takes application fee
@@ -157,8 +158,9 @@ async function createFinalCheckoutLink({ hallOwnerId, bookingId, invoiceId, invo
 
     const platformFeePctEnv = process.env.PLATFORM_FEE_PCT;
     const platformFeePct = Number.isFinite(Number(platformFeePctEnv)) ? Number(platformFeePctEnv) : 0.5;
+    const amountCents = Math.round(amountNum * 100);
     const applicationFeeAmount = platformFeePct > 0
-      ? Math.floor(Math.round(amountNum * 100) * (platformFeePct / 100))
+      ? Math.round(amountCents * (platformFeePct / 100))
       : undefined;
 
     const session = await stripe.checkout.sessions.create({
