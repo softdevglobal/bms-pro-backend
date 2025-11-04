@@ -67,9 +67,10 @@ async function createDepositCheckoutLink({ hallOwnerId, bookingId, bookingCode, 
       quantity: 1,
     };
 
-    // Optional platform fee via env percent
-    const platformFeePct = Number(process.env.PLATFORM_FEE_PCT || 0);
-    const applicationFeeAmount = Number.isFinite(platformFeePct) && platformFeePct > 0
+    // Platform fee: default to 0.5% (can override via PLATFORM_FEE_PCT)
+    const platformFeePctEnv = process.env.PLATFORM_FEE_PCT;
+    const platformFeePct = Number.isFinite(Number(platformFeePctEnv)) ? Number(platformFeePctEnv) : 0.5;
+    const applicationFeeAmount = platformFeePct > 0
       ? Math.floor(Math.round(amountNum * 100) * (platformFeePct / 100))
       : undefined;
 
@@ -154,8 +155,9 @@ async function createFinalCheckoutLink({ hallOwnerId, bookingId, invoiceId, invo
       quantity: 1,
     };
 
-    const platformFeePct = Number(process.env.PLATFORM_FEE_PCT || 0);
-    const applicationFeeAmount = Number.isFinite(platformFeePct) && platformFeePct > 0
+    const platformFeePctEnv = process.env.PLATFORM_FEE_PCT;
+    const platformFeePct = Number.isFinite(Number(platformFeePctEnv)) ? Number(platformFeePctEnv) : 0.5;
+    const applicationFeeAmount = platformFeePct > 0
       ? Math.floor(Math.round(amountNum * 100) * (platformFeePct / 100))
       : undefined;
 
