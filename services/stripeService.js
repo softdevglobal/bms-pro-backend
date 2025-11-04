@@ -52,8 +52,8 @@ async function createDepositCheckoutLink({ hallOwnerId, bookingId, bookingCode, 
       siteUrl,
       stripeAccountId: `${connectedAccountId.substring(0, 8)}...`
     });
-    const successUrl = `${siteUrl}/booknow?bookingId=${encodeURIComponent(bookingId)}&payment=success`;
-    const cancelUrl = `${siteUrl}/booknow?bookingId=${encodeURIComponent(bookingId)}&payment=cancel`;
+    const successUrl = `${siteUrl}/payment/success?bookingId=${encodeURIComponent(bookingId)}`;
+    const cancelUrl = `${siteUrl}/payment/fail?bookingId=${encodeURIComponent(bookingId)}&reason=cancelled`;
 
     const lineItem = {
       price_data: {
@@ -139,8 +139,8 @@ async function createFinalCheckoutLink({ hallOwnerId, bookingId, invoiceId, invo
     }
 
     const siteUrl = process.env.PUBLIC_SITE_URL || 'http://localhost:5173';
-    const successUrl = `${siteUrl}/booknow?bookingId=${encodeURIComponent(bookingId)}&invoiceId=${encodeURIComponent(invoiceId)}&payment=success`;
-    const cancelUrl = `${siteUrl}/booknow?bookingId=${encodeURIComponent(bookingId)}&invoiceId=${encodeURIComponent(invoiceId)}&payment=cancel`;
+    const successUrl = `${siteUrl}/payment/success?bookingId=${encodeURIComponent(bookingId)}&invoiceId=${encodeURIComponent(invoiceId)}`;
+    const cancelUrl = `${siteUrl}/payment/fail?bookingId=${encodeURIComponent(bookingId)}&invoiceId=${encodeURIComponent(invoiceId)}&reason=cancelled`;
 
     const lineItem = {
       price_data: {
