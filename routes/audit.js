@@ -84,6 +84,18 @@ router.get('/', verifyToken, checkAuditPermission, async (req, res) => {
       };
     });
 
+    // Normalize targets: show user email instead of UID for user targetType
+    auditLogs = auditLogs.map(log => {
+      if (log?.targetType === 'user' && typeof log?.target === 'string') {
+        const afterColon = String(log.target).split(':').slice(1).join(':').trim();
+        const hasEmail = afterColon.includes('@');
+        if (!hasEmail && log.userEmail) {
+          return { ...log, target: `User: ${log.userEmail}` };
+        }
+      }
+      return log;
+    });
+
     // Apply role-based filtering in memory
     if (req.userRole === 'super_admin') {
       // Super admins see logs from hall owners and system-wide activities
@@ -94,7 +106,7 @@ router.get('/', verifyToken, checkAuditPermission, async (req, res) => {
       );
     } else if (req.userRole === 'hall_owner') {
       // Hall owners see their own logs AND their sub-users' logs
-      const hallOwnerId = req.userData.id; // Hall owner's own UID
+      const hallOwnerId = req.user.uid; // Use authenticated UID to avoid missing id field
       
       // First, get all sub-users that belong to this hall owner
       const subUsersSnapshot = await admin.firestore()
@@ -114,7 +126,7 @@ router.get('/', verifyToken, checkAuditPermission, async (req, res) => {
     } else if (req.userRole === 'sub_user') {
       // Sub-users see their own logs only
       auditLogs = auditLogs.filter(log => 
-        log.userId === req.userData.id
+        log.userId === req.user.uid
       );
     }
 
@@ -195,6 +207,10 @@ router.get('/actions', verifyToken, checkAuditPermission, async (req, res) => {
       'user_deleted',
       'user_login',
       'user_logout',
+      'business_details_updated',
+      'stripe_account_updated',
+      'bank_details_updated',
+      'payment_methods_updated',
       'booking_created',
       'booking_updated',
       'booking_cancelled',
@@ -264,6 +280,18 @@ router.get('/stats', verifyToken, checkAuditPermission, async (req, res) => {
       };
     });
 
+    // Normalize targets: show user email instead of UID for user targetType
+    auditLogs = auditLogs.map(log => {
+      if (log?.targetType === 'user' && typeof log?.target === 'string') {
+        const afterColon = String(log.target).split(':').slice(1).join(':').trim();
+        const hasEmail = afterColon.includes('@');
+        if (!hasEmail && log.userEmail) {
+          return { ...log, target: `User: ${log.userEmail}` };
+        }
+      }
+      return log;
+    });
+
     // Apply role-based filtering in memory
     if (req.userRole === 'super_admin') {
       // Super admins see logs from hall owners and system-wide activities
@@ -274,7 +302,7 @@ router.get('/stats', verifyToken, checkAuditPermission, async (req, res) => {
       );
     } else if (req.userRole === 'hall_owner') {
       // Hall owners see their own logs AND their sub-users' logs
-      const hallOwnerId = req.userData.id; // Hall owner's own UID
+      const hallOwnerId = req.user.uid; // Use authenticated UID to avoid missing id field
       
       // First, get all sub-users that belong to this hall owner
       const subUsersSnapshot = await admin.firestore()
@@ -294,7 +322,7 @@ router.get('/stats', verifyToken, checkAuditPermission, async (req, res) => {
     } else if (req.userRole === 'sub_user') {
       // Sub-users see their own logs only
       auditLogs = auditLogs.filter(log => 
-        log.userId === req.userData.id
+        log.userId === req.user.uid
       );
     }
 

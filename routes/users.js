@@ -358,6 +358,13 @@ router.get('/stripe-account', verifyToken, async (req, res) => {
       ? requesterData.parentUserId
       : requesterId;
 
+    // Load target email for better audit target labeling
+    let targetEmail = targetUid;
+    try {
+      const tDoc = await admin.firestore().collection('users').doc(targetUid).get();
+      if (tDoc.exists) targetEmail = tDoc.data()?.email || targetUid;
+    } catch (_) {}
+
     const targetDoc = await admin.firestore().collection('users').doc(targetUid).get();
     if (!targetDoc.exists) {
       return res.status(404).json({ message: 'Hall owner not found' });
@@ -410,7 +417,7 @@ router.put('/stripe-account', verifyToken, async (req, res) => {
         userRole: req.user.role,
         action: 'stripe_account_updated',
         targetType: 'user',
-        target: `User: ${targetUid}`,
+        target: `User: ${targetEmail}`,
         changes: { new: { stripeAccountId: value ? 'acct_****' : '' } },
         ipAddress,
         hallId,
@@ -442,6 +449,13 @@ router.get('/bank-details', verifyToken, async (req, res) => {
     const targetUid = requesterData.role === 'sub_user' && requesterData.parentUserId
       ? requesterData.parentUserId
       : requesterId;
+
+    // Load target email for better audit target labeling
+    let targetEmail = targetUid;
+    try {
+      const tDoc = await admin.firestore().collection('users').doc(targetUid).get();
+      if (tDoc.exists) targetEmail = tDoc.data()?.email || targetUid;
+    } catch (_) {}
 
     const targetDoc = await admin.firestore().collection('users').doc(targetUid).get();
     if (!targetDoc.exists) {
@@ -512,7 +526,7 @@ router.put('/bank-details', verifyToken, async (req, res) => {
         userRole: req.user.role,
         action: 'bank_details_updated',
         targetType: 'user',
-        target: `User: ${targetUid}`,
+        target: `User: ${targetEmail}`,
         changes: { new: { bankDetails: { ...bankDetails, accountNumber: bankDetails.accountNumber ? '****' : '' } } },
         ipAddress,
         hallId,
@@ -600,6 +614,7 @@ router.put('/payment-methods', verifyToken, async (req, res) => {
     const currentDoc = await targetRef.get();
     const current = currentDoc.exists && currentDoc.data().paymentMethods ? currentDoc.data().paymentMethods : {};
     const newPaymentMethods = { ...current, ...updates };
+    const targetEmail = currentDoc.exists ? (currentDoc.data().email || targetUid) : targetUid;
 
     await targetRef.set({
       paymentMethods: newPaymentMethods,
@@ -615,7 +630,7 @@ router.put('/payment-methods', verifyToken, async (req, res) => {
         userRole: req.user.role,
         action: 'payment_methods_updated',
         targetType: 'user',
-        target: `User: ${targetUid}`,
+        target: `User: ${targetEmail}`,
         changes: { new: { paymentMethods: newPaymentMethods } },
         ipAddress,
         hallId,
@@ -628,6 +643,135 @@ router.put('/payment-methods', verifyToken, async (req, res) => {
     res.json({ paymentMethods: newPaymentMethods });
   } catch (error) {
     console.error('Error updating payment methods:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// PUT /api/users/business-details - Update hall owner's business details (handles sub-users)
+router.put('/business-details', verifyToken, async (req, res) => {
+  try {
+    const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
+
+    // Accept either nested address object or flat fields
+    const {
+      hallName,
+      contactNumber,
+      abn,
+      address
+    } = req.body || {};
+
+    // Determine hall owner target (for sub-users, update parent)
+    const requesterId = req.user.uid;
+    const requesterDoc = await admin.firestore().collection('users').doc(requesterId).get();
+    if (!requesterDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const requesterData = requesterDoc.data();
+
+    const targetUid = requesterData.role === 'sub_user' && requesterData.parentUserId
+      ? requesterData.parentUserId
+      : requesterId;
+
+    const targetRef = admin.firestore().collection('users').doc(targetUid);
+    const targetSnap = await targetRef.get();
+    if (!targetSnap.exists) {
+      return res.status(404).json({ message: 'Hall owner not found' });
+    }
+
+    // Prepare update data (only apply provided fields)
+    const updateData = {
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+    const existing = targetSnap.data() || {};
+    const changes = {};
+
+    if (hallName !== undefined) {
+      if (typeof hallName !== 'string' || !hallName.trim()) {
+        return res.status(400).json({ message: 'hallName must be a non-empty string' });
+      }
+      const newHallName = hallName.trim();
+      updateData.hallName = newHallName;
+      if (existing.hallName !== newHallName) {
+        changes.hallName = { old: existing.hallName || '', new: newHallName };
+      }
+    }
+
+    if (contactNumber !== undefined) {
+      if (typeof contactNumber !== 'string' || !contactNumber.trim()) {
+        return res.status(400).json({ message: 'contactNumber must be a non-empty string' });
+      }
+      const newContact = contactNumber.trim();
+      updateData.contactNumber = newContact;
+      if (existing.contactNumber !== newContact) {
+        changes.contactNumber = { old: existing.contactNumber || '', new: newContact };
+      }
+    }
+
+    if (abn !== undefined) {
+      if (typeof abn !== 'string') {
+        return res.status(400).json({ message: 'abn must be a string' });
+      }
+      const newAbn = abn.trim();
+      updateData.abn = newAbn;
+      if (existing.abn !== newAbn) {
+        changes.abn = { old: existing.abn || '', new: newAbn };
+      }
+    }
+
+    if (address !== undefined) {
+      // Expect { line1, line2, postcode, state }
+      const safeAddress = address || {};
+      const { line1 = '', line2 = '', postcode = '', state = '' } = safeAddress;
+      if (!String(line1).trim() || !String(postcode).trim() || !String(state).trim()) {
+        return res.status(400).json({ message: 'address.line1, address.postcode and address.state are required' });
+      }
+      const newAddress = {
+        line1: String(line1).trim(),
+        line2: String(line2 || '').trim(),
+        postcode: String(postcode).trim(),
+        state: String(state).trim()
+      };
+      updateData.address = newAddress;
+      if (JSON.stringify(existing.address || null) !== JSON.stringify(newAddress)) {
+        changes.address = { old: existing.address || null, new: newAddress };
+      }
+    }
+
+    // Nothing to update
+    const providedKeys = Object.keys(updateData).filter(k => k !== 'updatedAt');
+    if (providedKeys.length === 0) {
+      return res.status(400).json({ message: 'No valid fields provided' });
+    }
+
+    await targetRef.set(updateData, { merge: true });
+
+    // Audit log (only if any meaningful change)
+    try {
+      const AuditService = require('../services/auditService');
+      const hallId = targetUid;
+      const hasChanges = Object.keys(changes).length > 0;
+      if (hasChanges) {
+        const targetEmail = existing?.email || targetUid;
+        await AuditService.logEvent({
+          userId: req.user.uid,
+          userEmail: req.user.email,
+          userRole: req.user.role,
+          action: 'business_details_updated',
+          targetType: 'user',
+          target: `User: ${targetEmail}`,
+          changes,
+          ipAddress,
+          hallId,
+          additionalInfo: 'Updated business details for hall owner'
+        });
+      }
+    } catch (auditErr) {
+      console.warn('Audit log failed for business details update:', auditErr.message);
+    }
+
+    res.json({ message: 'Business details updated successfully' });
+  } catch (error) {
+    console.error('Error updating business details:', error);
     res.status(500).json({ message: error.message });
   }
 });
@@ -953,6 +1097,7 @@ router.get('/profile', verifyToken, async (req, res) => {
       hallName: userData.hallName || (userData.owner_profile?.hallName) || null,
       contactNumber: userData.contactNumber || (userData.owner_profile?.contactNumber) || null,
       address: userData.address || (userData.owner_profile?.address) || null,
+      abn: userData.abn || (userData.owner_profile?.abn) || null,
       profilePicture: userData.profilePicture || null,
       createdAt: userData.createdAt,
       updatedAt: userData.updatedAt
@@ -1172,7 +1317,8 @@ router.get('/parent-data/:parentUserId', async (req, res) => {
       role: parentData.role,
       hallName: parentData.hallName || (parentData.owner_profile?.hallName) || null,
       contactNumber: parentData.contactNumber || (parentData.owner_profile?.contactNumber) || null,
-      address: parentData.address || (parentData.owner_profile?.address) || null
+      address: parentData.address || (parentData.owner_profile?.address) || null,
+      abn: parentData.abn || (parentData.owner_profile?.abn) || null
     };
 
     res.json(parentInfo);
