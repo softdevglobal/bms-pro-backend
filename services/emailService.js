@@ -273,7 +273,17 @@ class EmailService {
           const depositAmount = Number(data.depositAmount ?? 0);
           const finalDue = Number(data.finalDue ?? Math.max(0, (totalAmount - depositAmount)));
           const taxAmount = Number(data.taxAmount ?? 0);
-          const gstRatePct = Number.isFinite(Number(data.gst)) ? Number(data.gst) : 10;
+            // Prefer explicit taxRate from system settings; fallback to derived from amounts; default 10
+            const derivedRate = (() => {
+              const sub = Math.max(0, Math.round(((totalAmount || 0) - (taxAmount || 0)) * 100) / 100);
+              if (sub > 0 && Number.isFinite(taxAmount)) {
+                return Math.round(((taxAmount / sub) * 100));
+              }
+              return null;
+            })();
+            const gstRatePct = Number.isFinite(Number(data.taxRate))
+              ? Number(data.taxRate)
+              : (Number.isFinite(derivedRate) ? derivedRate : 10);
           const taxType = data.taxType || 'Inclusive';
           const subtotal = Math.max(0, Math.round(((totalAmount || 0) - (taxAmount || 0)) * 100) / 100);
 
@@ -288,7 +298,7 @@ class EmailService {
                 </tr>
                 <tr>
                   <td style="padding: 10px 8px; color: #64748b; font-weight: 600;">GST (${gstRatePct}%):</td>
-                  <td style="padding: 10px 8px; color: #1e293b; text-align: right;">$${taxAmount.toFixed(2)} AUD</td>
+                  <td style="padding: 10px 8px; color: #1e293b; text-align: right;">${gstRatePct}%</td>
                 </tr>
                 <tr>
                   <td style="padding: 12px 8px; color: #334155; font-weight: 700;">Total (incl. GST):</td>
@@ -952,7 +962,7 @@ class EmailService {
                   </div>
                   <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px dashed #e2e8f0;">
                     <span style="color: #64748b; font-weight: 500;">GST (${ratePct}%):</span>
-                    <span style="color: #1e293b; font-weight: 600;">$${gst.toFixed(2)} AUD</span>
+                    <span style="color: #1e293b; font-weight: 600;">${ratePct}%</span>
                   </div>
                   <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 0;">
                     <span style="color: #64748b; font-weight: 500;">Total (incl. GST):</span>
