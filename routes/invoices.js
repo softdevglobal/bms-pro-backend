@@ -10,6 +10,46 @@ const { createFinalCheckoutLink } = require('../services/stripeService');
 
 const router = express.Router();
 
+// Normalize totals for FINAL invoices from booking.payment_details/tax when available
+function normalizeFinalInvoiceFromBooking(inv, booking) {
+  try {
+    if (!inv || inv.invoiceType !== 'FINAL' || !booking) return inv;
+    const taxObj = booking.payment_details?.tax || booking.tax || {};
+    const rate = Number.isFinite(Number(taxObj.tax_rate)) ? Number(taxObj.tax_rate) : (Number.isFinite(Number(inv.taxRate)) ? Number(inv.taxRate) : 10);
+    const fullIncl =
+      Number(booking.payment_details?.total_amount) ||
+      Number(booking.tax?.total_amount) ||
+      Number(inv.fullAmountWithGST) ||
+      Number(inv.total) ||
+      0;
+    const deposit =
+      Number(inv.depositPaid) ||
+      Number(booking.payment_details?.deposit_amount) ||
+      0;
+    // Prefer booking's final_due over any stale value on the invoice
+    const finalDue =
+      (Number.isFinite(Number(booking.payment_details?.final_due))
+        ? Number(booking.payment_details?.final_due)
+        : (Number.isFinite(Number(inv.finalTotal)) ? Number(inv.finalTotal) : Math.max(0, fullIncl - deposit)));
+    // Prefer booking's tax_amount/gst first
+    const gst =
+      (Number.isFinite(Number(taxObj.tax_amount || taxObj.gst))
+        ? Number(taxObj.tax_amount || taxObj.gst)
+        : (Number.isFinite(Number(inv.gst)) ? Number(inv.gst) : (Math.round((fullIncl - (fullIncl / (1 + (rate / 100)))) * 100) / 100)));
+
+    return Object.assign({}, inv, {
+      taxRate: rate,
+      fullAmountWithGST: fullIncl,
+      total: fullIncl,
+      depositPaid: deposit,
+      finalTotal: finalDue,
+      gst
+    });
+  } catch (_) {
+    return inv;
+  }
+}
+
 // Helper function to generate invoice number
 const generateInvoiceNumber = () => {
   const year = new Date().getFullYear();
@@ -76,7 +116,8 @@ function buildInvoiceHTML(invoiceData) {
   const customerEmail = invoiceData.customer?.email || '';
   const subtotal = Number(invoiceData.subtotal || 0);
   const gst = Number(invoiceData.gst || 0);
-  const totalIncl = Number(invoiceData.total || 0);
+  // Prefer fullAmountWithGST when present to ensure GST-inclusive full amount is used
+  const totalIncl = Number((invoiceData.fullAmountWithGST ?? invoiceData.total) || 0);
   const depositPaid = Number(invoiceData.depositPaid || 0);
   const totalDue = Number((depositPaid > 0 && invoiceData.finalTotal) ? invoiceData.finalTotal : totalIncl);
   const taxRate = Number(invoiceData.taxRate ?? 10);
@@ -202,7 +243,6 @@ function buildInvoiceHTML(invoiceData) {
   <div class="hero">
     <div class="t">${depositPaid > 0 ? 'Final Payment Due' : 'Total Amount'}</div>
     <div class="amt">$${totalDue.toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} AUD</div>
-    ${depositPaid > 0 ? `<div class="sub">Final Amount = ${totalIncl.toLocaleString('en-AU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} - ${depositPaid.toLocaleString('en-AU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} = ${totalDue.toLocaleString('en-AU', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</div>` : ''}
   </div>
 
   <table class="items">
@@ -417,7 +457,7 @@ async function generateInvoicePDF_PDFKit(invoiceData) {
          .fontSize(10)
          .font('Helvetica')
          .text(invoiceData.resource, 320, 295)
-         .text(`Booking ID: ${invoiceData.bookingId}`, 320, 310);
+         .text(`Booking Reference: ${invoiceData.bookingCode || invoiceData.bookingId || ''}`, 320, 310);
       
       // Add booking source and quotation info if applicable
       if (invoiceData.bookingSource === 'quotation' && invoiceData.quotationId) {
@@ -530,12 +570,6 @@ async function generateInvoicePDF_PDFKit(invoiceData) {
            .text(`$${fullAmount.toFixed(2)}`, 500, currentY + 10, { width: 45, align: 'right' })
            .text('Deposit Paid:', 360, currentY + 25)
            .text(`-$${invoiceData.depositPaid.toFixed(2)}`, 500, currentY + 25, { width: 45, align: 'right' });
-        
-        // Add calculation explanation
-        doc.fillColor(secondaryColor)
-           .fontSize(8)
-           .font('Helvetica')
-           .text(`Calculation: $${fullAmount.toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)}`, 360, currentY + 40, { width: 185, align: 'center' });
 
         // Tax details
         doc.fillColor(darkGray)
@@ -585,19 +619,7 @@ async function generateInvoicePDF_PDFKit(invoiceData) {
       doc.fontSize(24)
          .text(`$${(invoiceData.finalTotal || invoiceData.total).toFixed(2)} AUD`, 60, bannerY + 28, { width: 485, align: 'center' });
 
-      // Calculation summary below banner (if deposit exists)
-      if (invoiceData.depositPaid > 0) {
-        doc.roundedRect(50, bannerY + 70, 505, 34, 8)
-           .fill('#f8fafc')
-           .stroke('#e2e8f0', 1);
-        doc.fillColor('#64748b').font('Helvetica').fontSize(9)
-           .text(
-             invoiceData.calculationBreakdown?.formula || `Final Payment = $${(invoiceData.fullAmountWithGST || invoiceData.total).toFixed(2)} - $${invoiceData.depositPaid.toFixed(2)} = $${invoiceData.finalTotal.toFixed(2)}`,
-             60,
-             bannerY + 82,
-             { width: 485, align: 'center' }
-           );
-      }
+      // Removed calculation summary banner per requirements
 
       // Deposit information section (if applicable)
       let paymentSectionY = (invoiceData.depositPaid > 0 ? (bannerY + 115) : (bannerY + 30));
@@ -1299,7 +1321,8 @@ router.put('/:id/status', verifyToken, async (req, res) => {
         console.warn('Stripe FINAL link generation skipped:', e?.message || e);
       }
 
-      const processed = {
+      // Best-effort normalization for PDF/email display
+      let processed = {
         ...invoiceData,
         stripePaymentUrl,
         issueDate: invoiceData.issueDate?.toDate?.() || new Date(),
@@ -1307,6 +1330,14 @@ router.put('/:id/status', verifyToken, async (req, res) => {
         createdAt: invoiceData.createdAt?.toDate?.() || new Date(),
         updatedAt: new Date()
       };
+      try {
+        if (invoiceData.invoiceType === 'FINAL' && invoiceData.bookingId) {
+          const bSnap = await admin.firestore().collection('bookings').doc(invoiceData.bookingId).get();
+          if (bSnap.exists) {
+            processed = normalizeFinalInvoiceFromBooking(processed, bSnap.data());
+          }
+        }
+      } catch (_) {}
       const pdfBuffer = await generateInvoicePDF(processed);
       
       // Send email with PDF attachment
@@ -1763,8 +1794,19 @@ router.get('/:id/pdf', verifyToken, async (req, res) => {
       return res.status(403).json({ message: 'Access denied. Only hall owners and sub-users can view invoices.' });
     }
 
+    // Normalize from booking where applicable for accurate display
+    let toRender = invoiceData;
+    try {
+      if (invoiceData.invoiceType === 'FINAL' && invoiceData.bookingId) {
+        const bSnap = await admin.firestore().collection('bookings').doc(invoiceData.bookingId).get();
+        if (bSnap.exists) {
+          toRender = normalizeFinalInvoiceFromBooking(invoiceData, bSnap.data());
+        }
+      }
+    } catch (_) {}
+
     // Generate PDF
-    const pdfBuffer = await generateInvoicePDF(invoiceData);
+    const pdfBuffer = await generateInvoicePDF(toRender);
 
     // Set response headers
     res.setHeader('Content-Type', 'application/pdf');
