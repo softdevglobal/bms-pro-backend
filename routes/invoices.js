@@ -1098,21 +1098,26 @@ router.get('/hall-owner/:hallOwnerId', verifyToken, async (req, res) => {
       .get();
 
     const invoices = await Promise.all(invoicesSnapshot.docs.map(async (doc) => {
-      const data = doc.data();
+      const raw = doc.data();
+      let data = { ...raw };
       
-      // Fetch booking source from associated booking if bookingId exists
+      // Fetch booking to enrich and normalize when applicable
       let bookingSource = data.bookingSource;
       let quotationId = data.quotationId;
       let bookingCode = data.bookingCode;
+      let bookingData = null;
       
-      if (data.bookingId && (!bookingSource || !bookingCode)) {
+      if (data.bookingId) {
         try {
           const bookingDoc = await admin.firestore().collection('bookings').doc(data.bookingId).get();
           if (bookingDoc.exists) {
-            const bookingData = bookingDoc.data();
-            bookingSource = bookingData.bookingSource;
-            quotationId = bookingData.quotationId;
+            bookingData = bookingDoc.data();
+            bookingSource = bookingData.bookingSource || bookingSource;
+            quotationId = bookingData.quotationId ?? quotationId;
             bookingCode = bookingData.bookingCode || bookingCode;
+            if (data.invoiceType === 'FINAL') {
+              data = normalizeFinalInvoiceFromBooking(data, bookingData);
+            }
           }
         } catch (error) {
           console.error('Error fetching booking data for invoice:', error);
@@ -1545,17 +1550,21 @@ router.get('/:id', verifyToken, async (req, res) => {
       return res.status(403).json({ message: 'Access denied. Only hall owners and sub-users can view invoices.' });
     }
 
-    // Fetch booking source from associated booking if bookingId exists
+    // Fetch booking to enrich and normalize (for FINAL invoices) if bookingId exists
     let bookingSource = invoiceData.bookingSource;
     let quotationId = invoiceData.quotationId;
-    
-    if (invoiceData.bookingId && !bookingSource) {
+    let bookingCode = invoiceData.bookingCode || null;
+    if (invoiceData.bookingId) {
       try {
         const bookingDoc = await admin.firestore().collection('bookings').doc(invoiceData.bookingId).get();
         if (bookingDoc.exists) {
           const bookingData = bookingDoc.data();
-          bookingSource = bookingData.bookingSource;
-          quotationId = bookingData.quotationId;
+          bookingSource = bookingData.bookingSource || bookingSource;
+          quotationId = bookingData.quotationId ?? quotationId;
+          bookingCode = bookingData.bookingCode || bookingCode;
+          if (invoiceData.invoiceType === 'FINAL') {
+            invoiceData = normalizeFinalInvoiceFromBooking(invoiceData, bookingData);
+          }
         }
       } catch (error) {
         console.error('Error fetching booking data for invoice:', error);
@@ -1567,17 +1576,7 @@ router.get('/:id', verifyToken, async (req, res) => {
       ...invoiceData,
       bookingSource: bookingSource || 'direct',
       quotationId: quotationId,
-      bookingCode: invoiceData.bookingCode || (await (async () => {
-        try {
-          if (invoiceData.bookingId) {
-            const bookingDoc = await admin.firestore().collection('bookings').doc(invoiceData.bookingId).get();
-            return bookingDoc.exists ? (bookingDoc.data().bookingCode || null) : null;
-          }
-          return null;
-        } catch (_) {
-          return null;
-        }
-      })()),
+      bookingCode: bookingCode,
       issueDate: invoiceData.issueDate?.toDate?.() || null,
       dueDate: invoiceData.dueDate?.toDate?.() || null,
       sentAt: invoiceData.sentAt?.toDate?.() || null,
