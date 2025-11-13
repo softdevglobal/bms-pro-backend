@@ -59,6 +59,10 @@ app.use('/api/email-templates', emailTemplatesRoutes);
 const emailCommsRoutes = require('./routes/emailComms');
 app.use('/api/email-comms', emailCommsRoutes);
 
+// Password / Reset routes
+const passwordRoutes = require('./routes/password');
+app.use('/api', passwordRoutes);
+
 // Invoices routes
 const invoicesRoutes = require('./routes/invoices');
 app.use('/api/invoices', invoicesRoutes);
