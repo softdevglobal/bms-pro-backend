@@ -1495,8 +1495,25 @@ class EmailService {
   async sendPaymentThankYouEmail(invoiceData) {
     try {
       const subject = `Payment received - Invoice ${invoiceData.invoiceNumber}`;
-      const html = await this.generatePaymentThankYouHTML(invoiceData);
-      const text = `Dear ${invoiceData.customer?.name || 'Customer'},\n\nThank you for your payment. We have marked your invoice ${invoiceData.invoiceNumber} as PAID.\n\nAmount: $${(invoiceData.finalTotal || invoiceData.total || 0).toFixed ? (invoiceData.finalTotal || invoiceData.total).toFixed(2) : invoiceData.finalTotal || invoiceData.total} AUD\nInvoice Type: ${invoiceData.invoiceType}\nIssue Date: ${new Date(invoiceData.issueDate).toLocaleDateString()}\n\nWe appreciate your business!`;
+      // Resolve the actual amount paid robustly:
+      // 1) Prefer explicit paidAmount when present
+      // 2) Else for FINAL invoices with a deposit, use finalTotal if provided,
+      //    otherwise derive as (total - depositPaid)
+      // 3) Else fallback to total
+      const resolvedPaid = (() => {
+        const paid = Number(invoiceData?.paidAmount);
+        if (Number.isFinite(paid) && paid > 0) return paid;
+        const total = Number(invoiceData?.total || 0);
+        const finalTotal = Number(invoiceData?.finalTotal);
+        if (invoiceData?.invoiceType === 'FINAL') {
+          if (Number.isFinite(finalTotal) && finalTotal > 0) return finalTotal;
+          const deposit = Number(invoiceData?.depositPaid || 0);
+          if (total > 0) return Math.max(0, total - deposit);
+        }
+        return total;
+      })();
+      const html = await this.generatePaymentThankYouHTML({ ...invoiceData, resolvedPaid });
+      const text = `Dear ${invoiceData.customer?.name || 'Customer'},\n\nThank you for your payment. We have marked your invoice ${invoiceData.invoiceNumber} as PAID.\n\nAmount: $${resolvedPaid.toFixed(2)} AUD\nInvoice Type: ${invoiceData.invoiceType}\nIssue Date: ${new Date(invoiceData.issueDate).toLocaleDateString()}\n\nWe appreciate your business!`;
 
       const mailOptions = {
         from: 'dpawan434741@gmail.com',
@@ -1517,7 +1534,20 @@ class EmailService {
 
   async generatePaymentThankYouHTML(invoiceData) {
     const logoUrl = await this.getHallOwnerLogo(invoiceData.hallOwnerId);
-    const amount = (invoiceData.finalTotal || invoiceData.total) || 0;
+    // Use resolvedPaid when injected; otherwise compute using the same robust logic as in sender
+    const amount = (() => {
+      if (Number.isFinite(Number(invoiceData?.resolvedPaid))) return Number(invoiceData.resolvedPaid);
+      const paid = Number(invoiceData?.paidAmount);
+      if (Number.isFinite(paid) && paid > 0) return paid;
+      const total = Number(invoiceData?.total || 0);
+      const finalTotal = Number(invoiceData?.finalTotal);
+      if (invoiceData?.invoiceType === 'FINAL') {
+        if (Number.isFinite(finalTotal) && finalTotal > 0) return finalTotal;
+        const deposit = Number(invoiceData?.depositPaid || 0);
+        if (total > 0) return Math.max(0, total - deposit);
+      }
+      return total;
+    })();
     return `
       <!DOCTYPE html>
       <html>
