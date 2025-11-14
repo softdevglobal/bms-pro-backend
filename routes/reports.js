@@ -77,6 +77,26 @@ const calculateConversionRate = (confirmed, total) => {
   return Math.round((confirmed / total) * 100);
 };
 
+// Case-insensitive status helpers
+const isConfirmed = (status) => String(status || '').toLowerCase() === 'confirmed' || String(status || '').toLowerCase() === 'completed';
+const isPending = (status) => String(status || '').toLowerCase() === 'pending' || String(status || '').toLowerCase() === 'tentative';
+const isCancelled = (status) => String(status || '').toLowerCase() === 'cancelled';
+
+// Robust revenue accessor for bookings or invoices
+const getBookingRevenue = (b) => {
+  // Prefer calculatedPrice; fallback to priceDetails.frontendEstimatedPrice
+  const calc = Number(b?.calculatedPrice || 0);
+  const est = Number(b?.priceDetails?.adminEstimatedPrice || b?.priceDetails?.frontendEstimatedPrice || 0);
+  return Number.isFinite(calc) && calc > 0 ? calc : (Number.isFinite(est) ? est : 0);
+};
+const getInvoiceTotal = (inv) => {
+  const finalTotal = Number(inv?.finalTotal);
+  const total = Number(inv?.total);
+  if (Number.isFinite(finalTotal)) return finalTotal;
+  if (Number.isFinite(total)) return total;
+  return 0;
+};
+
 // Helper function to generate forecast data
 const generateForecastData = (historicalData, periods = 6) => {
   if (!historicalData || historicalData.length < 2) return [];
@@ -176,18 +196,41 @@ router.get('/executive-kpis', verifyToken, async (req, res) => {
       return bookingDate >= previousPeriodStart && bookingDate <= previousPeriodEnd;
     });
 
-    // Calculate current period metrics
-    const currentBookings = currentPeriodBookings.filter(b => b.status === 'confirmed').length;
-    const currentRevenue = currentPeriodBookings
-      .filter(b => b.status === 'confirmed')
-      .reduce((sum, b) => sum + (b.calculatedPrice || 0), 0);
+    // Get invoices for this hall owner (filter in memory by date to avoid compound indexes)
+    const invoicesSnapshot = await admin.firestore()
+      .collection('invoices')
+      .where('hallOwnerId', '==', dataUserId)
+      .get();
+    const allInvoices = invoicesSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      issueDate: doc.data().issueDate?.toDate?.() || null,
+      dueDate: doc.data().dueDate?.toDate?.() || null,
+      createdAt: doc.data().createdAt?.toDate?.() || null,
+      updatedAt: doc.data().updatedAt?.toDate?.() || null
+    }));
+
+    // Calculate current period metrics (bookings: pending+confirmed+completed)
+    const currentBookings = currentPeriodBookings.filter(b => isConfirmed(b.status) || isPending(b.status)).length;
+
+    // Revenue: prefer invoices issued in current period; fallback to booking revenue
+    const currentPeriodInvoices = allInvoices.filter(inv => {
+      const d = inv.issueDate || inv.createdAt || null;
+      return d && d >= dateRanges.startDate && d <= dateRanges.endDate;
+    });
+    const currentRevenueFromInvoices = currentPeriodInvoices.reduce((sum, inv) => sum + getInvoiceTotal(inv), 0);
+    const currentRevenueFromBookings = currentPeriodBookings
+      .filter(b => isConfirmed(b.status))
+      .reduce((sum, b) => sum + getBookingRevenue(b), 0);
+    const currentRevenue = Math.max(currentRevenueFromInvoices, currentRevenueFromBookings);
+
     const currentUtilisation = calculateOccupancy(
-      currentPeriodBookings.filter(b => b.status === 'confirmed')
+      currentPeriodBookings.filter(b => isConfirmed(b.status))
     );
     
     // Calculate deposit conversion (confirmed vs pending)
-    const confirmedBookings = currentPeriodBookings.filter(b => b.status === 'confirmed').length;
-    const pendingBookings = currentPeriodBookings.filter(b => b.status === 'pending').length;
+    const confirmedBookings = currentPeriodBookings.filter(b => isConfirmed(b.status)).length;
+    const pendingBookings = currentPeriodBookings.filter(b => isPending(b.status)).length;
     const totalBookings = confirmedBookings + pendingBookings;
     const depositConversion = totalBookings > 0 ? Math.round((confirmedBookings / totalBookings) * 100) : 0;
     
@@ -195,24 +238,31 @@ router.get('/executive-kpis', verifyToken, async (req, res) => {
     const onTimePayments = totalBookings > 0 ? Math.round((confirmedBookings / totalBookings) * 100) : 0;
     
     // Calculate cancellation rate
-    const cancelledBookings = currentPeriodBookings.filter(b => b.status === 'cancelled').length;
+    const cancelledBookings = currentPeriodBookings.filter(b => isCancelled(b.status)).length;
     const cancellationRate = totalBookings > 0 ? Math.round((cancelledBookings / totalBookings) * 100) : 0;
 
     // Calculate previous period metrics for comparison
-    const previousBookings = previousPeriodBookings.filter(b => b.status === 'confirmed').length;
-    const previousRevenue = previousPeriodBookings
-      .filter(b => b.status === 'confirmed')
-      .reduce((sum, b) => sum + (b.calculatedPrice || 0), 0);
+    const previousBookings = previousPeriodBookings.filter(b => isConfirmed(b.status) || isPending(b.status)).length;
+    const previousPeriodInvoices = allInvoices.filter(inv => {
+      const d = inv.issueDate || inv.createdAt || null;
+      return d && d >= previousPeriodStart && d <= previousPeriodEnd;
+    });
+    const previousRevenueInvoices = previousPeriodInvoices.reduce((sum, inv) => sum + getInvoiceTotal(inv), 0);
+    const previousRevenueBookings = previousPeriodBookings
+      .filter(b => isConfirmed(b.status))
+      .reduce((sum, b) => sum + getBookingRevenue(b), 0);
+    const previousRevenue = Math.max(previousRevenueInvoices, previousRevenueBookings);
+
     const previousUtilisation = calculateOccupancy(
-      previousPeriodBookings.filter(b => b.status === 'confirmed')
+      previousPeriodBookings.filter(b => isConfirmed(b.status))
     );
     
-    const previousConfirmed = previousPeriodBookings.filter(b => b.status === 'confirmed').length;
-    const previousPending = previousPeriodBookings.filter(b => b.status === 'pending').length;
+    const previousConfirmed = previousPeriodBookings.filter(b => isConfirmed(b.status)).length;
+    const previousPending = previousPeriodBookings.filter(b => isPending(b.status)).length;
     const previousTotal = previousConfirmed + previousPending;
     const previousDepositConversion = previousTotal > 0 ? Math.round((previousConfirmed / previousTotal) * 100) : 0;
     const previousOnTimePayments = previousTotal > 0 ? Math.round((previousConfirmed / previousTotal) * 100) : 0;
-    const previousCancelled = previousPeriodBookings.filter(b => b.status === 'cancelled').length;
+    const previousCancelled = previousPeriodBookings.filter(b => isCancelled(b.status)).length;
     const previousCancellationRate = previousTotal > 0 ? Math.round((previousCancelled / previousTotal) * 100) : 0;
 
     // Calculate changes
@@ -315,6 +365,18 @@ router.get('/historical-data', verifyToken, async (req, res) => {
       updatedAt: doc.data().updatedAt?.toDate?.() || null
     }));
 
+    // Fetch invoices for revenue aggregation
+    const invoicesSnapshot = await admin.firestore()
+      .collection('invoices')
+      .where('hallOwnerId', '==', dataUserId)
+      .get();
+    const allInvoices = invoicesSnapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      issueDate: doc.data().issueDate?.toDate?.() || null,
+      createdAt: doc.data().createdAt?.toDate?.() || null
+    }));
+
     // Generate historical data for the last N months
     const historicalData = [];
     const now = new Date();
@@ -325,11 +387,21 @@ router.get('/historical-data', verifyToken, async (req, res) => {
       
       const monthBookings = allBookings.filter(booking => {
         const bookingDate = new Date(booking.bookingDate);
-        return bookingDate >= monthStart && bookingDate <= monthEnd && booking.status === 'confirmed';
+        return bookingDate >= monthStart && bookingDate <= monthEnd && (isConfirmed(booking.status) || isPending(booking.status));
       });
       
       const bookings = monthBookings.length;
-      const revenue = monthBookings.reduce((sum, b) => sum + (b.calculatedPrice || 0), 0);
+
+      // Revenue: prefer invoices issued in the month; fallback to confirmed booking values
+      const monthInvoices = allInvoices.filter(inv => {
+        const d = inv.issueDate || inv.createdAt || null;
+        return d && d >= monthStart && d <= monthEnd;
+      });
+      const revenueFromInvoices = monthInvoices.reduce((sum, inv) => sum + getInvoiceTotal(inv), 0);
+      const revenueFromBookings = monthBookings
+        .filter(b => isConfirmed(b.status))
+        .reduce((sum, b) => sum + getBookingRevenue(b), 0);
+      const revenue = Math.max(revenueFromInvoices, revenueFromBookings);
       
       historicalData.push({
         month: monthStart.toLocaleDateString('en-AU', { month: 'long', year: 'numeric' }),
@@ -402,11 +474,11 @@ router.get('/pipeline-data', verifyToken, async (req, res) => {
       const monthBookings = allBookings.filter(booking => {
         const bookingDate = new Date(booking.bookingDate);
         return bookingDate >= monthStart && bookingDate <= monthEnd && 
-               ['pending', 'confirmed'].includes(booking.status);
+               (isPending(booking.status) || isConfirmed(booking.status));
       });
       
       const bookings = monthBookings.length;
-      const revenue = monthBookings.reduce((sum, b) => sum + (b.calculatedPrice || 0), 0);
+      const revenue = monthBookings.reduce((sum, b) => sum + getBookingRevenue(b), 0);
       
       pipelineData.push({
         month: monthStart.toLocaleDateString('en-AU', { month: 'long', year: 'numeric' }),
