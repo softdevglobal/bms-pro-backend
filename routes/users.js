@@ -1043,6 +1043,11 @@ router.delete('/:id', async (req, res) => {
 
     const userData = userDoc.data();
 
+    // Prevent deletion of super admin accounts
+    if (userData?.role === 'super_admin') {
+      return res.status(403).json({ message: 'Super admin accounts cannot be deleted' });
+    }
+
     // Delete user from Firebase Auth
     await admin.auth().deleteUser(id);
 
