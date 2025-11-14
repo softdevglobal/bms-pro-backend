@@ -58,6 +58,7 @@ router.get('/', async (req, res) => {
         id: doc.id,
         email: data.email,
         role: data.role,
+        status: data.status || 'active',
         hallName: data.hallName || (data.owner_profile?.hallName) || null,
         contactNumber: data.contactNumber || (data.owner_profile?.contactNumber) || null,
         address: data.address ? {
@@ -129,6 +130,7 @@ router.post('/', async (req, res) => {
       id: userRecord.uid, // Add the UID as a field in the document
       email: email,
       role: role,
+      status: 'active',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     };
@@ -1025,6 +1027,76 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ message: 'Invalid email format' });
     }
 
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// PUT /api/users/:id/status - Suspend/Activate a user (hall_owner only)
+router.put('/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body || {};
+    const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
+
+    if (!['active', 'suspended'].includes(String(status))) {
+      return res.status(400).json({ message: 'Invalid status. Must be active or suspended' });
+    }
+
+    // Load target user
+    const userRef = admin.firestore().collection('users').doc(id);
+    const userSnap = await userRef.get();
+    if (!userSnap.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const target = userSnap.data();
+
+    // Do not allow changing status for super admins
+    if (target.role === 'super_admin') {
+      return res.status(403).json({ message: 'Cannot change status of super admin accounts' });
+    }
+
+    // Only hall_owner status is meaningful here
+    if (target.role !== 'hall_owner') {
+      return res.status(400).json({ message: 'Only hall_owner accounts can be suspended/activated' });
+    }
+
+    // Apply status to Firestore
+    await userRef.set({
+      status,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    // Also toggle Firebase Auth disabled flag
+    try {
+      await admin.auth().updateUser(id, { disabled: status === 'suspended' });
+    } catch (authErr) {
+      console.warn('Failed to update Auth disabled flag:', authErr.message);
+    }
+
+    // Audit log
+    try {
+      const AuditService = require('../services/auditService');
+      const hallId = target.id || id;
+      const targetEmail = target.email || id;
+      await AuditService.logEvent({
+        userId: req.user?.uid || 'system',
+        userEmail: req.user?.email || 'system',
+        userRole: req.user?.role || 'system',
+        action: 'user_status_updated',
+        targetType: 'user',
+        target: `User: ${targetEmail}`,
+        changes: { new: { status } },
+        ipAddress,
+        hallId,
+        additionalInfo: `Status changed to ${status}`
+      });
+    } catch (auditErr) {
+      console.warn('Audit log failed for status update:', auditErr.message);
+    }
+
+    res.json({ message: 'Status updated successfully', status });
+  } catch (error) {
+    console.error('Error updating user status:', error);
     res.status(500).json({ message: error.message });
   }
 });
