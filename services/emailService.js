@@ -723,7 +723,7 @@ class EmailService {
             
             <div style="text-align: center; margin: 30px 0;">
               <p style="color: #64748b; margin-bottom: 20px;">To accept this quotation, please reply to this email or contact us directly.</p>
-              <a href="mailto:dpawan434741@gmail.com" 
+              <a href="mailto:cranbournepublichall@gmail.com" 
                  style="background-color: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
                 Accept Quotation
               </a>
@@ -1411,7 +1411,7 @@ class EmailService {
             
             <div style="text-align: center; margin: 30px 0;">
               <p style="color: #64748b; margin-bottom: 20px;">Payment is due within 30 days of the invoice date.</p>
-              <a href="mailto:dpawan434741@gmail.com" 
+              <a href="mailto:cranbournepublichall@gmail.com" 
                  style="background-color: #4f46e5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
                 Contact Us
               </a>
@@ -1751,7 +1751,7 @@ class EmailService {
               <p style="color: #64748b; margin-bottom: 20px;">
                 ${isOverdue ? 'Please arrange payment immediately to avoid additional charges.' : 'Payment is due within 30 days of the invoice date.'}
               </p>
-              <a href="mailto:dpawan434741@gmail.com" 
+              <a href="mailto:cranbournepublichall@gmail.com" 
                  style="background-color: ${isOverdue ? '#dc2626' : '#4f46e5'}; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
                 ${isOverdue ? 'Contact Us Urgently' : 'Contact Us'}
               </a>
