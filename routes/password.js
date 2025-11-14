@@ -13,7 +13,23 @@ router.post('/password/forgot', async (req, res) => {
       return res.status(400).json({ message: 'Valid email is required' });
     }
 
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    // Determine the frontend base URL
+    // Priority: PUBLIC_SITE_URL -> FRONTEND_URL -> inferred from request -> localhost (dev)
+    const configuredUrl =
+      process.env.PUBLIC_SITE_URL ||
+      process.env.FRONTEND_URL ||
+      '';
+    let frontendUrl = configuredUrl;
+    if (!frontendUrl) {
+      const host = req.get('x-forwarded-host') || req.get('host');
+      const protocol = req.get('x-forwarded-proto') || req.protocol || 'http';
+      if (host) {
+        frontendUrl = `${protocol}://${host}`;
+      }
+    }
+    if (!frontendUrl) {
+      frontendUrl = 'http://localhost:5173';
+    }
     const actionCodeSettings = {
       url: `${frontendUrl}/reset-password`,
       handleCodeInApp: true
@@ -25,9 +41,9 @@ router.post('/password/forgot', async (req, res) => {
     const urlObj = new URL(link);
     const oobCode = urlObj.searchParams.get('oobCode') || '';
     const lang = urlObj.searchParams.get('lang') || 'en';
-    // Include both query and hash with the code to survive email client/link proxy rewriting
+    // Build a clean app URL using query parameters (BrowserRouter friendly)
     const base = `${frontendUrl.replace(/\/+$/, '')}/reset-password`;
-    const appLink = `${base}?oobCode=${encodeURIComponent(oobCode)}&lang=${encodeURIComponent(lang)}#oobCode=${encodeURIComponent(oobCode)}&lang=${encodeURIComponent(lang)}`;
+    const appLink = `${base}?oobCode=${encodeURIComponent(oobCode)}&lang=${encodeURIComponent(lang)}`;
 
     // Compose email with matching "from" address for transporter to avoid rejection
     const subject = 'Reset your BMSPRO password';
