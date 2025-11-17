@@ -1,10 +1,47 @@
 const express = require('express');
 const admin = require('../firebaseAdmin');
 const { verifyToken } = require('../middleware/authMiddleware');
+const multer = require('multer');
 
 const router = express.Router();
 
 // use shared auth middleware
+
+// Initialize Firebase Storage bucket for resource images
+let bucket;
+try {
+  bucket = admin.storage().bucket('bms-pro-e3125.firebasestorage.app');
+  console.log('Firebase Storage bucket initialized for resources:', bucket.name);
+} catch (error) {
+  console.error('Error initializing Firebase Storage bucket for resources:', error);
+  bucket = null;
+}
+
+// Configure multer for image uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'), false);
+    }
+  }
+});
+
+// Multer error handler
+const handleMulterError = (error, req, res, next) => {
+  if (error instanceof multer.MulterError) {
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ message: 'File too large. Maximum size is 5MB.' });
+    }
+    return res.status(400).json({ message: error.message });
+  } else if (error) {
+    return res.status(400).json({ message: error.message });
+  }
+  next();
+};
 
 // Generate unique resource code
 const generateResourceCode = async (hallOwnerId) => {
@@ -393,6 +430,121 @@ router.get('/public/:hallOwnerId', async (req, res) => {
   } catch (error) {
     console.error('Error fetching public resources:', error);
     res.status(500).json({ message: error.message });
+  }
+});
+
+// POST /api/resources/:id/image - Upload or replace a resource image
+router.post('/:id/image', verifyToken, upload.single('image'), handleMulterError, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { id } = req.params;
+
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+
+    // Ensure bucket availability
+    if (!bucket) {
+      return res.status(500).json({
+        message: 'Firebase Storage is not available. Please check your Firebase configuration.',
+        bucketName: 'bms-pro-e3125.firebasestorage.app'
+      });
+    }
+    const [exists] = await bucket.exists();
+    if (!exists) {
+      return res.status(500).json({
+        message: 'Firebase Storage bucket does not exist. Please create it in Firebase Console.',
+        bucketName: bucket.name
+      });
+    }
+
+    // Verify resource ownership
+    const resourceRef = admin.firestore().collection('resources').doc(id);
+    const resourceSnap = await resourceRef.get();
+    if (!resourceSnap.exists) {
+      return res.status(404).json({ message: 'Resource not found' });
+    }
+    const resourceData = resourceSnap.data();
+    if (resourceData.hallOwnerId !== userId) {
+      return res.status(403).json({ message: 'Access denied. You can only update your own resources.' });
+    }
+
+    // Generate filename and upload
+    const ext = (req.file.originalname.split('.').pop() || 'jpg').toLowerCase();
+    const fileName = `resource-images/${userId}/${id}-${Date.now()}.${ext}`;
+    const file = bucket.file(fileName);
+
+    await file.save(req.file.buffer, {
+      metadata: {
+        contentType: req.file.mimetype,
+        metadata: {
+          uploadedBy: userId,
+          resourceId: id,
+          uploadedAt: new Date().toISOString()
+        }
+      }
+    });
+
+    // Make public and get URL
+    await file.makePublic();
+    const imageUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+
+    // Save on resource document
+    await resourceRef.update({
+      imageUrl,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    res.json({ message: 'Image uploaded successfully', imageUrl });
+  } catch (error) {
+    console.error('Error uploading resource image:', error);
+    res.status(500).json({ message: error.message || 'Error uploading resource image' });
+  }
+});
+
+// DELETE /api/resources/:id/image - Remove resource image
+router.delete('/:id/image', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { id } = req.params;
+
+    // Verify resource ownership
+    const resourceRef = admin.firestore().collection('resources').doc(id);
+    const resourceSnap = await resourceRef.get();
+    if (!resourceSnap.exists) {
+      return res.status(404).json({ message: 'Resource not found' });
+    }
+    const resourceData = resourceSnap.data();
+    if (resourceData.hallOwnerId !== userId) {
+      return res.status(403).json({ message: 'Access denied. You can only update your own resources.' });
+    }
+
+    const currentUrl = resourceData.imageUrl;
+    if (!currentUrl) {
+      return res.status(400).json({ message: 'No image to delete' });
+    }
+
+    // Best-effort delete from storage
+    try {
+      const pathStart = currentUrl.indexOf(`${bucket?.name}/`);
+      if (bucket && pathStart !== -1) {
+        const storagePath = currentUrl.substring(pathStart + bucket.name.length + 1);
+        await bucket.file(storagePath).delete({ ignoreNotFound: true });
+      }
+    } catch (storageErr) {
+      console.warn('Failed to delete resource image from storage:', storageErr?.message);
+    }
+
+    // Remove from Firestore
+    await resourceRef.update({
+      imageUrl: admin.firestore.FieldValue.delete(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    res.json({ message: 'Image deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting resource image:', error);
+    res.status(500).json({ message: error.message || 'Error deleting resource image' });
   }
 });
 
