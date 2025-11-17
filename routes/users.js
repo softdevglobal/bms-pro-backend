@@ -649,6 +649,113 @@ router.put('/payment-methods', verifyToken, async (req, res) => {
   }
 });
 
+// GET /api/users/event-types - Get hall owner's event types (handles sub-users)
+router.get('/event-types', verifyToken, async (req, res) => {
+  try {
+    const requesterId = req.user.uid;
+    const requesterDoc = await admin.firestore().collection('users').doc(requesterId).get();
+    if (!requesterDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const requesterData = requesterDoc.data();
+    const targetUid = requesterData.role === 'sub_user' && requesterData.parentUserId
+      ? requesterData.parentUserId
+      : requesterId;
+
+    const targetDoc = await admin.firestore().collection('users').doc(targetUid).get();
+    if (!targetDoc.exists) {
+      return res.status(404).json({ message: 'Hall owner not found' });
+    }
+
+    const data = targetDoc.data();
+    const eventTypes = Array.isArray(data?.eventTypes) ? data.eventTypes : [];
+    res.json({ eventTypes });
+  } catch (error) {
+    console.error('Error fetching event types:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// PUT /api/users/event-types - Update hall owner's event types (handles sub-users)
+router.put('/event-types', verifyToken, async (req, res) => {
+  try {
+    const ipAddress = req.ip || req.connection.remoteAddress || req.headers['x-forwarded-for'];
+    const { eventTypes } = req.body || {};
+    if (!Array.isArray(eventTypes)) {
+      return res.status(400).json({ message: 'eventTypes must be an array of strings' });
+    }
+    const cleaned = eventTypes
+      .filter((v) => typeof v === 'string')
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0);
+
+    const requesterId = req.user.uid;
+    const requesterDoc = await admin.firestore().collection('users').doc(requesterId).get();
+    if (!requesterDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    const requesterData = requesterDoc.data();
+
+    const targetUid = requesterData.role === 'sub_user' && requesterData.parentUserId
+      ? requesterData.parentUserId
+      : requesterId;
+
+    const targetRef = admin.firestore().collection('users').doc(targetUid);
+    const targetSnap = await targetRef.get();
+    if (!targetSnap.exists) {
+      return res.status(404).json({ message: 'Hall owner not found' });
+    }
+    const targetEmail = targetSnap.data()?.email || targetUid;
+
+    await targetRef.set({
+      eventTypes: cleaned,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
+
+    // Audit log
+    try {
+      const AuditService = require('../services/auditService');
+      const hallId = targetUid;
+      await AuditService.logEvent({
+        userId: req.user.uid,
+        userEmail: req.user.email,
+        userRole: req.user.role,
+        action: 'event_types_updated',
+        targetType: 'user',
+        target: `User: ${targetEmail}`,
+        changes: { new: { eventTypes: cleaned } },
+        ipAddress,
+        hallId,
+        additionalInfo: 'Updated event types for hall owner'
+      });
+    } catch (auditErr) {
+      console.warn('Audit log failed for event types update:', auditErr.message);
+    }
+
+    res.json({ eventTypes: cleaned });
+  } catch (error) {
+    console.error('Error updating event types:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+// GET /api/users/public/:hallOwnerId/event-types - Public endpoint for booking engine
+router.get('/public/:hallOwnerId/event-types', async (req, res) => {
+  try {
+    const { hallOwnerId } = req.params;
+    const targetDoc = await admin.firestore().collection('users').doc(hallOwnerId).get();
+    if (!targetDoc.exists) {
+      return res.status(404).json({ message: 'Hall owner not found' });
+    }
+    const data = targetDoc.data();
+    const eventTypes = Array.isArray(data?.eventTypes) ? data.eventTypes : [];
+    res.json({ eventTypes });
+  } catch (error) {
+    console.error('Error fetching public event types:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // PUT /api/users/business-details - Update hall owner's business details (handles sub-users)
 router.put('/business-details', verifyToken, async (req, res) => {
   try {

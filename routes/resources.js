@@ -238,6 +238,65 @@ router.put('/:id', verifyToken, async (req, res) => {
   }
 });
 
+// PUT /api/resources/:id/event-types - Update event types for a hall resource
+router.put('/:id/event-types', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.uid;
+    const { id } = req.params;
+    const { eventTypes } = req.body;
+
+    // Validate payload
+    if (!Array.isArray(eventTypes)) {
+      return res.status(400).json({ message: 'eventTypes must be an array of strings' });
+    }
+    const cleaned = eventTypes
+      .filter((v) => typeof v === 'string')
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0);
+
+    // Get user data to verify they are a hall_owner
+    const userDoc = await admin.firestore().collection('users').doc(userId).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const userData = userDoc.data();
+    if (userData.role !== 'hall_owner') {
+      return res.status(403).json({ message: 'Access denied. Only hall owners can update event types.' });
+    }
+
+    // Check if resource exists and belongs to this hall_owner
+    const resourceDoc = await admin.firestore().collection('resources').doc(id).get();
+    if (!resourceDoc.exists) {
+      return res.status(404).json({ message: 'Resource not found' });
+    }
+
+    const resourceData = resourceDoc.data();
+    if (resourceData.hallOwnerId !== userId) {
+      return res.status(403).json({ message: 'Access denied. You can only update your own resources.' });
+    }
+
+    // Only allow adding event types to halls (type === 'hall')
+    if ((resourceData.type || '').toLowerCase() !== 'hall') {
+      return res.status(400).json({ message: 'Event types can only be set for resources of type hall' });
+    }
+
+    await admin.firestore().collection('resources').doc(id).update({
+      eventTypes: cleaned,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    res.json({
+      message: 'Event types updated successfully',
+      id,
+      eventTypes: cleaned
+    });
+  } catch (error) {
+    console.error('Error updating event types:', error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // DELETE /api/resources/:id - Delete a resource
 router.delete('/:id', verifyToken, async (req, res) => {
   try {
@@ -322,7 +381,8 @@ router.get('/public/:hallOwnerId', async (req, res) => {
       address: userData.address || 'Address not provided',
       phone: userData.phone || userData.contactNumber || 'Phone not provided',
       email: userData.email || 'Email not provided',
-      businessName: userData.businessName || userData.name || 'Business Name'
+      businessName: userData.businessName || userData.name || 'Business Name',
+      eventTypes: Array.isArray(userData.eventTypes) ? userData.eventTypes : []
     };
     
     res.json({
