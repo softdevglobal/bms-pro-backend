@@ -136,6 +136,7 @@ router.post('/admin', verifyToken, async (req, res) => {
       customerPhone,
       eventType,
       selectedHall,
+      selectedHalls: selectedHallsInput,
       bookingDate,
       startTime,
       endTime,
@@ -156,9 +157,17 @@ router.post('/admin', verifyToken, async (req, res) => {
     });
 
     // Validate required fields
-    if (!customerName || !customerEmail || !customerPhone || !eventType || !selectedHall || !bookingDate || !startTime || !endTime) {
+    // Normalize selected resources: support multiple resources while remaining backward-compatible
+    let selectedHalls = [];
+    if (Array.isArray(selectedHallsInput) && selectedHallsInput.length > 0) {
+      selectedHalls = selectedHallsInput.filter(Boolean).map(String);
+    } else if (selectedHall) {
+      selectedHalls = [String(selectedHall)];
+    }
+
+    if (!customerName || !customerEmail || !customerPhone || !eventType || selectedHalls.length === 0 || !bookingDate || !startTime || !endTime) {
       return res.status(400).json({
-        message: 'Missing required fields: customerName, customerEmail, customerPhone, eventType, selectedHall, bookingDate, startTime, endTime'
+        message: 'Missing required fields: customerName, customerEmail, customerPhone, eventType, at least one resource, bookingDate, startTime, endTime'
       });
     }
 
@@ -229,36 +238,40 @@ router.post('/admin', verifyToken, async (req, res) => {
       return res.status(403).json({ message: 'Access denied. Only hall owners and sub-users can create bookings.' });
     }
 
-    // Verify selected hall exists and belongs to the hall owner
-    const hallDoc = await admin.firestore().collection('resources').doc(selectedHall).get();
-    if (!hallDoc.exists) {
-      return res.status(404).json({ message: 'Selected hall not found' });
+    // Verify selected resources exist and belong to the hall owner
+    const hallNames = [];
+    for (const resId of selectedHalls) {
+      const rDoc = await admin.firestore().collection('resources').doc(resId).get();
+      if (!rDoc.exists) {
+        return res.status(404).json({ message: `Selected resource not found: ${resId}` });
+      }
+      const rData = rDoc.data();
+      if (rData.hallOwnerId !== actualHallOwnerId) {
+        return res.status(400).json({ message: `Selected resource does not belong to the specified hall owner: ${resId}` });
+      }
+      hallNames.push(rData.name || resId);
     }
 
-    const hallData = hallDoc.data();
-    if (hallData.hallOwnerId !== actualHallOwnerId) {
-      return res.status(400).json({ message: 'Selected hall does not belong to the specified hall owner' });
-    }
-
-    // Check for conflicting bookings
-    const conflictingBookings = await admin.firestore()
+    // Check for conflicting bookings across ANY selected resource (in-memory filter for flexibility/back-compat)
+    const potentialConflictsSnap = await admin.firestore()
       .collection('bookings')
       .where('hallOwnerId', '==', actualHallOwnerId)
-      .where('selectedHall', '==', selectedHall)
       .where('bookingDate', '==', bookingDate)
       .where('status', 'in', ['pending', 'confirmed'])
       .get();
 
-    // Check for time conflicts
-    for (const bookingDoc of conflictingBookings.docs) {
+    for (const bookingDoc of potentialConflictsSnap.docs) {
       const booking = bookingDoc.data();
       const existingStart = new Date(`2000-01-01T${booking.startTime}:00`);
       const existingEnd = new Date(`2000-01-01T${booking.endTime}:00`);
-      
-      // Check if times overlap
-      if ((startTimeObj < existingEnd && endTimeObj > existingStart)) {
+      const bookingResources = Array.isArray(booking.selectedHalls) && booking.selectedHalls.length > 0
+        ? booking.selectedHalls.map(String)
+        : [booking.selectedHall].filter(Boolean).map(String);
+
+      const intersects = bookingResources.some(r => selectedHalls.includes(r));
+      if (intersects && (startTimeObj < existingEnd && endTimeObj > existingStart)) {
         return res.status(409).json({
-          message: 'Time slot is already booked. Please choose a different time.',
+          message: 'Time slot is already booked for one or more selected resources. Please adjust your selection/time.',
           conflictingBooking: {
             startTime: booking.startTime,
             endTime: booking.endTime,
@@ -273,68 +286,47 @@ router.post('/admin', verifyToken, async (req, res) => {
     let priceDetails = null;
     
     try {
-      // Get pricing for the selected hall
-      const pricingSnapshot = await admin.firestore()
-        .collection('pricing')
-        .where('hallOwnerId', '==', actualHallOwnerId)
-        .where('resourceId', '==', selectedHall)
-        .get();
-      
-      if (!pricingSnapshot.empty) {
-        const pricingData = pricingSnapshot.docs[0].data();
-        
-        // Calculate duration in hours - use the actual booking date to avoid timezone issues
-        const startTimeObj = new Date(`${bookingDate}T${startTime}:00`);
-        const endTimeObj = new Date(`${bookingDate}T${endTime}:00`);
-        const durationHours = (endTimeObj.getTime() - startTimeObj.getTime()) / (1000 * 60 * 60);
-        
-        // Debug: Log the time calculation
-        console.log('Admin booking - Time calculation:', {
-          bookingDate: bookingDate,
-          startTime: startTime,
-          endTime: endTime,
-          startTimeObj: startTimeObj.toISOString(),
-          endTimeObj: endTimeObj.toISOString(),
-          durationHours: durationHours
-        });
-        
-        // Check if it's weekend (Saturday = 6, Sunday = 0)
-        const bookingDateObj = new Date(bookingDate);
-        const isWeekend = bookingDateObj.getDay() === 0 || bookingDateObj.getDay() === 6;
-        
-        const rate = isWeekend ? pricingData.weekendRate : pricingData.weekdayRate;
-        
-        if (pricingData.rateType === 'hourly') {
-          calculatedPrice = rate * durationHours;
-        } else {
-          // For daily rates, assume minimum 4 hours for half day, 8+ hours for full day
-          calculatedPrice = durationHours >= 8 ? rate : rate * 0.5;
+      // Calculate duration in hours - use the actual booking date to avoid timezone issues
+      const stObj = new Date(`${bookingDate}T${startTime}:00`);
+      const etObj = new Date(`${bookingDate}T${endTime}:00`);
+      const durationHours = (etObj.getTime() - stObj.getTime()) / (1000 * 60 * 60);
+      const isWeekend = new Date(bookingDate).getDay() === 0 || new Date(bookingDate).getDay() === 6;
+
+      let breakdown = [];
+      for (const resId of selectedHalls) {
+        const pricingSnapshot = await admin.firestore()
+          .collection('pricing')
+          .where('hallOwnerId', '==', actualHallOwnerId)
+          .where('resourceId', '==', resId)
+          .get();
+        if (!pricingSnapshot.empty) {
+          const pricingData = pricingSnapshot.docs[0].data();
+          const rate = isWeekend ? pricingData.weekendRate : pricingData.weekdayRate;
+          const resPrice = pricingData.rateType === 'hourly' ? rate * durationHours : (durationHours >= 8 ? rate : rate * 0.5);
+          calculatedPrice += Number(resPrice || 0);
+          breakdown.push({
+            resourceId: resId,
+            weekdayRate: pricingData.weekdayRate,
+            weekendRate: pricingData.weekendRate,
+            rateType: pricingData.rateType,
+            appliedRate: rate,
+            durationHours,
+            isWeekend,
+            calculatedPrice: resPrice
+          });
         }
-        
+      }
+
+      if (breakdown.length > 0) {
         priceDetails = {
-          rateType: pricingData.rateType,
-          weekdayRate: pricingData.weekdayRate,
-          weekendRate: pricingData.weekendRate,
-          appliedRate: rate,
-          durationHours: durationHours,
-          isWeekend: isWeekend,
-          calculationMethod: pricingData.rateType === 'hourly' ? 'hourly' : 'daily',
+          multiResource: true,
+          breakdown,
+          total: calculatedPrice,
+          calculationMethod: 'sum_per_resource',
           frontendEstimatedPrice: estimatedPrice || null
         };
-        
-        console.log('Admin booking price calculation:', {
-          resourceId: selectedHall,
-          rateType: pricingData.rateType,
-          weekdayRate: pricingData.weekdayRate,
-          weekendRate: pricingData.weekendRate,
-          appliedRate: rate,
-          durationHours: durationHours,
-          isWeekend: isWeekend,
-          calculatedPrice: calculatedPrice,
-          adminEstimatedPrice: estimatedPrice
-        });
       } else {
-        console.log('No pricing found for hall, using estimated price or default');
+        console.log('No pricing found for selected resources, using estimated price or default');
         calculatedPrice = estimatedPrice || 0;
       }
     } catch (priceError) {
@@ -365,8 +357,12 @@ router.post('/admin', verifyToken, async (req, res) => {
       customerPhone: customerPhone.trim(),
       customerAvatar: customerAvatar || null,
       eventType: eventType.trim(),
-      selectedHall: selectedHall,
-      hallName: hallData.name,
+      // Backward-compat: keep legacy single resource using the first in the list
+      selectedHall: selectedHalls[0],
+      hallName: hallNames[0],
+      // New multi-resource fields
+      selectedHalls: selectedHalls,
+      hallNames: hallNames,
       bookingDate: bookingDate,
       startTime: startTime,
       endTime: endTime,
@@ -407,7 +403,7 @@ router.post('/admin', verifyToken, async (req, res) => {
       customerName: customerName,
       customerEmail: customerEmail,
       hallOwnerId: actualHallOwnerId,
-      selectedHall: selectedHall,
+      selectedHalls: selectedHalls,
       bookingDate: bookingDate,
       createdBy: userId
     });
@@ -459,7 +455,7 @@ router.post('/admin', verifyToken, async (req, res) => {
             bookingCode: bookingCode,
             customerName: customerName,
             eventType: eventType,
-            hallName: hallData.name,
+            hallName: hallNames[0],
             bookingDate: bookingDate,
             startTime: startTime,
             endTime: endTime,
@@ -501,6 +497,7 @@ router.post('/', async (req, res) => {
       customerPhone,
       eventType,
       selectedHall,
+      selectedHalls: selectedHallsInput,
       bookingDate,
       startTime,
       endTime,
@@ -513,9 +510,17 @@ router.post('/', async (req, res) => {
     } = req.body;
 
     // Validate required fields
-    if (!customerName || !customerEmail || !customerPhone || !eventType || !selectedHall || !bookingDate || !startTime || !endTime || !hallOwnerId) {
+    // Normalize selected resources across public booking as well
+    let selectedHalls = [];
+    if (Array.isArray(selectedHallsInput) && selectedHallsInput.length > 0) {
+      selectedHalls = selectedHallsInput.filter(Boolean).map(String);
+    } else if (selectedHall) {
+      selectedHalls = [String(selectedHall)];
+    }
+
+    if (!customerName || !customerEmail || !customerPhone || !eventType || selectedHalls.length === 0 || !bookingDate || !startTime || !endTime || !hallOwnerId) {
       return res.status(400).json({
-        message: 'Missing required fields: customerName, customerEmail, customerPhone, eventType, selectedHall, bookingDate, startTime, endTime, hallOwnerId'
+        message: 'Missing required fields: customerName, customerEmail, customerPhone, eventType, at least one resource, bookingDate, startTime, endTime, hallOwnerId'
       });
     }
 
@@ -569,36 +574,40 @@ router.post('/', async (req, res) => {
       return res.status(404).json({ message: 'Hall owner not found' });
     }
 
-    // Verify selected hall exists and belongs to the hall owner
-    const hallDoc = await admin.firestore().collection('resources').doc(selectedHall).get();
-    if (!hallDoc.exists) {
-      return res.status(404).json({ message: 'Selected hall not found' });
+    // Verify selected resources exist and belong to the hall owner
+    const hallNames = [];
+    for (const resId of selectedHalls) {
+      const rDoc = await admin.firestore().collection('resources').doc(resId).get();
+      if (!rDoc.exists) {
+        return res.status(404).json({ message: `Selected resource not found: ${resId}` });
+      }
+      const rData = rDoc.data();
+      if (rData.hallOwnerId !== hallOwnerId) {
+        return res.status(400).json({ message: `Selected resource does not belong to the specified hall owner: ${resId}` });
+      }
+      hallNames.push(rData.name || resId);
     }
 
-    const hallData = hallDoc.data();
-    if (hallData.hallOwnerId !== hallOwnerId) {
-      return res.status(400).json({ message: 'Selected hall does not belong to the specified hall owner' });
-    }
-
-    // Check for conflicting bookings
-    const conflictingBookings = await admin.firestore()
+    // Check for conflicting bookings across ANY selected resource (in-memory filter for flexibility/back-compat)
+    const potentialConflictsSnap = await admin.firestore()
       .collection('bookings')
       .where('hallOwnerId', '==', hallOwnerId)
-      .where('selectedHall', '==', selectedHall)
       .where('bookingDate', '==', bookingDate)
       .where('status', 'in', ['pending', 'confirmed'])
       .get();
 
-    // Check for time conflicts
-    for (const bookingDoc of conflictingBookings.docs) {
+    for (const bookingDoc of potentialConflictsSnap.docs) {
       const booking = bookingDoc.data();
       const existingStart = new Date(`2000-01-01T${booking.startTime}:00`);
       const existingEnd = new Date(`2000-01-01T${booking.endTime}:00`);
-      
-      // Check if times overlap
-      if ((startTimeObj < existingEnd && endTimeObj > existingStart)) {
+      const bookingResources = Array.isArray(booking.selectedHalls) && booking.selectedHalls.length > 0
+        ? booking.selectedHalls.map(String)
+        : [booking.selectedHall].filter(Boolean).map(String);
+
+      const intersects = bookingResources.some(r => selectedHalls.includes(r));
+      if (intersects && (startTimeObj < existingEnd && endTimeObj > existingStart)) {
         return res.status(409).json({
-          message: 'Time slot is already booked. Please choose a different time.',
+          message: 'Time slot is already booked for one or more selected resources. Please choose a different time.',
           conflictingBooking: {
             startTime: booking.startTime,
             endTime: booking.endTime,
@@ -613,60 +622,52 @@ router.post('/', async (req, res) => {
     let priceDetails = null;
     
     try {
-      // Get pricing for the selected hall
-      const pricingSnapshot = await admin.firestore()
-        .collection('pricing')
-        .where('hallOwnerId', '==', hallOwnerId)
-        .where('resourceId', '==', selectedHall)
-        .get();
-      
-      if (!pricingSnapshot.empty) {
-        const pricingData = pricingSnapshot.docs[0].data();
-        
-        // Calculate duration in hours
-        const startTimeObj = new Date(`2000-01-01T${startTime}:00`);
-        const endTimeObj = new Date(`2000-01-01T${endTime}:00`);
-        const durationHours = (endTimeObj.getTime() - startTimeObj.getTime()) / (1000 * 60 * 60);
-        
-        // Check if it's weekend (Saturday = 6, Sunday = 0)
-        const bookingDateObj = new Date(bookingDate);
-        const isWeekend = bookingDateObj.getDay() === 0 || bookingDateObj.getDay() === 6;
-        
-        const rate = isWeekend ? pricingData.weekendRate : pricingData.weekdayRate;
-        
-        if (pricingData.rateType === 'hourly') {
-          calculatedPrice = rate * durationHours;
-        } else {
-          // For daily rates, assume minimum 4 hours for half day, 8+ hours for full day
-          calculatedPrice = durationHours >= 8 ? rate : rate * 0.5;
+      // Calculate duration in hours
+      const stObj = new Date(`2000-01-01T${startTime}:00`);
+      const etObj = new Date(`2000-01-01T${endTime}:00`);
+      const durationHours = (etObj.getTime() - stObj.getTime()) / (1000 * 60 * 60);
+      const isWeekend = new Date(bookingDate).getDay() === 0 || new Date(bookingDate).getDay() === 6;
+
+      let breakdown = [];
+      for (const resId of selectedHalls) {
+        const pricingSnapshot = await admin.firestore()
+          .collection('pricing')
+          .where('hallOwnerId', '==', hallOwnerId)
+          .where('resourceId', '==', resId)
+          .get();
+        if (!pricingSnapshot.empty) {
+          const pricingData = pricingSnapshot.docs[0].data();
+          const rate = isWeekend ? pricingData.weekendRate : pricingData.weekdayRate;
+          const resPrice = pricingData.rateType === 'hourly' ? rate * durationHours : (durationHours >= 8 ? rate : rate * 0.5);
+          calculatedPrice += Number(resPrice || 0);
+          breakdown.push({
+            resourceId: resId,
+            weekdayRate: pricingData.weekdayRate,
+            weekendRate: pricingData.weekendRate,
+            rateType: pricingData.rateType,
+            appliedRate: rate,
+            durationHours,
+            isWeekend,
+            calculatedPrice: resPrice
+          });
         }
-        
+      }
+
+      if (breakdown.length > 0) {
         priceDetails = {
-          rateType: pricingData.rateType,
-          weekdayRate: pricingData.weekdayRate,
-          weekendRate: pricingData.weekendRate,
-          appliedRate: rate,
-          durationHours: durationHours,
-          isWeekend: isWeekend,
-          calculationMethod: pricingData.rateType === 'hourly' ? 'hourly' : 'daily',
+          multiResource: true,
+          breakdown,
+          total: calculatedPrice,
+          calculationMethod: 'sum_per_resource',
           frontendEstimatedPrice: estimatedPrice || null
         };
-        
-        console.log('Price calculation details:', {
-          resourceId: selectedHall,
-          rateType: pricingData.rateType,
-          weekdayRate: pricingData.weekdayRate,
-          weekendRate: pricingData.weekendRate,
-          appliedRate: rate,
-          durationHours: durationHours,
-          isWeekend: isWeekend,
-          calculatedPrice: calculatedPrice,
-          frontendEstimatedPrice: estimatedPrice
-        });
+      } else {
+        calculatedPrice = estimatedPrice || 0;
       }
     } catch (priceError) {
       console.error('Error calculating price:', priceError);
       // Continue with booking even if price calculation fails
+      calculatedPrice = estimatedPrice || 0;
     }
 
     // Create booking data
@@ -678,8 +679,10 @@ router.post('/', async (req, res) => {
       customerPhone: customerPhone.trim(),
       customerAvatar: customerAvatar || null, // Customer avatar URL
       eventType: eventType.trim(),
-      selectedHall: selectedHall,
-      hallName: hallData.name, // Store hall name for easier reference
+      selectedHall: selectedHalls[0],
+      hallName: hallNames[0], // Store first hall name for easier reference (back-compat)
+      selectedHalls: selectedHalls,
+      hallNames: hallNames,
       bookingDate: bookingDate,
       startTime: startTime,
       endTime: endTime,
@@ -711,7 +714,7 @@ router.post('/', async (req, res) => {
       customerName: customerName,
       customerEmail: customerEmail,
       hallOwnerId: hallOwnerId,
-      selectedHall: selectedHall,
+      selectedHalls: selectedHalls,
       bookingDate: bookingDate,
       bookingSource: bookingSource || 'website'
     });
@@ -768,7 +771,7 @@ router.post('/', async (req, res) => {
             endTime: endTime,
             calculatedPrice: calculatedPrice,
             depositAmount: 0,
-            hallName: hallData.name,
+            hallName: hallNames[0],
             status: 'pending'
           }
         };
@@ -1462,6 +1465,7 @@ router.put('/:id', verifyToken, async (req, res) => {
       customerPhone,
       eventType,
       selectedHall,
+      selectedHalls: selectedHallsInput,
       bookingDate,
       startTime,
       endTime,
@@ -1556,13 +1560,25 @@ router.put('/:id', verifyToken, async (req, res) => {
     }
 
     let hallNameToSet = null;
-    const newSelectedHall = selectedHall !== undefined ? selectedHall : existing.selectedHall;
+    // Normalize resources: if selectedHalls provided, use it, else fall back to single selectedHall or existing
+    let newSelectedHalls = Array.isArray(selectedHallsInput) ? selectedHallsInput.filter(Boolean).map(String) : (existing.selectedHalls || []);
+    if (selectedHall !== undefined) {
+      // if single selectedHall provided, override first/only
+      newSelectedHalls = [String(selectedHall)];
+    }
+    if (!newSelectedHalls || newSelectedHalls.length === 0) {
+      // fall back to existing legacy field
+      newSelectedHalls = existing.selectedHalls && existing.selectedHalls.length > 0
+        ? existing.selectedHalls.map(String)
+        : [existing.selectedHall].filter(Boolean).map(String);
+    }
+    const newSelectedHall = newSelectedHalls[0];
     const newBookingDate = bookingDate !== undefined ? bookingDate : existing.bookingDate;
     const newStartTime = startTime !== undefined ? startTime : existing.startTime;
     const newEndTime = endTime !== undefined ? endTime : existing.endTime;
 
     // If any date/time/resource changed, validate and conflict-check
-    const coreChanged = selectedHall !== undefined || bookingDate !== undefined || startTime !== undefined || endTime !== undefined;
+    const coreChanged = selectedHall !== undefined || Array.isArray(selectedHallsInput) || bookingDate !== undefined || startTime !== undefined || endTime !== undefined;
     if (coreChanged) {
       // Validate date/time
       const dateObj = new Date(newBookingDate);
@@ -1573,18 +1589,21 @@ router.put('/:id', verifyToken, async (req, res) => {
       const et = new Date(`2000-01-01T${newEndTime}:00`);
       if (et <= st) return res.status(400).json({ message: 'End time must be after start time' });
 
-      // Verify hall exists and belongs to hall owner
-      const hallDoc = await admin.firestore().collection('resources').doc(newSelectedHall).get();
-      if (!hallDoc.exists) return res.status(404).json({ message: 'Selected hall not found' });
-      const hallData = hallDoc.data();
-      if (hallData.hallOwnerId !== permittedHallOwnerId) return res.status(400).json({ message: 'Selected hall does not belong to hall owner' });
-      hallNameToSet = hallData.name;
+      // Verify each selected resource exists and belongs to hall owner, and capture names
+      const hallNames = [];
+      for (const resId of newSelectedHalls) {
+        const rDoc = await admin.firestore().collection('resources').doc(resId).get();
+        if (!rDoc.exists) return res.status(404).json({ message: `Selected resource not found: ${resId}` });
+        const rData = rDoc.data();
+        if (rData.hallOwnerId !== permittedHallOwnerId) return res.status(400).json({ message: `Selected resource does not belong to hall owner: ${resId}` });
+        hallNames.push(rData.name || resId);
+      }
+      hallNameToSet = hallNames[0];
 
-      // Conflict check (exclude current booking)
+      // Conflict check across any selected resource (exclude current booking)
       const conflictsSnap = await admin.firestore()
         .collection('bookings')
         .where('hallOwnerId', '==', permittedHallOwnerId)
-        .where('selectedHall', '==', newSelectedHall)
         .where('bookingDate', '==', newBookingDate)
         .where('status', 'in', ['pending', 'confirmed'])
         .get();
@@ -1592,15 +1611,23 @@ router.put('/:id', verifyToken, async (req, res) => {
       for (const d of conflictsSnap.docs) {
         if (d.id === id) continue;
         const b = d.data();
+        const bResources = Array.isArray(b.selectedHalls) && b.selectedHalls.length > 0
+          ? b.selectedHalls.map(String)
+          : [b.selectedHall].filter(Boolean).map(String);
+        const intersects = bResources.some(r => newSelectedHalls.includes(r));
+        if (!intersects) continue;
         const es = new Date(`2000-01-01T${b.startTime}:00`);
         const ee = new Date(`2000-01-01T${b.endTime}:00`);
         if (st < ee && et > es) {
-          return res.status(409).json({ message: 'Time slot is already booked. Please choose a different time.' });
+          return res.status(409).json({ message: 'Time slot is already booked for one or more selected resources. Please choose a different time.' });
         }
       }
 
+      // Persist normalized resources (back-compat + new fields)
       updateData.selectedHall = newSelectedHall;
       updateData.hallName = hallNameToSet;
+      updateData.selectedHalls = newSelectedHalls;
+      updateData.hallNames = hallNames;
       updateData.bookingDate = newBookingDate;
       updateData.startTime = newStartTime;
       updateData.endTime = newEndTime;
@@ -1617,34 +1644,52 @@ router.put('/:id', verifyToken, async (req, res) => {
       };
     } else if (coreChanged) {
       try {
-        let calculatedPrice = existing.calculatedPrice || 0;
-        let priceDetails = existing.priceDetails || null;
+        let calculatedPrice = 0;
+        let priceDetails = null;
 
-        const pricingSnapshot = await admin.firestore()
-          .collection('pricing')
-          .where('hallOwnerId', '==', permittedHallOwnerId)
-          .where('resourceId', '==', newSelectedHall)
-          .get();
-        if (!pricingSnapshot.empty) {
-          const pricingData = pricingSnapshot.docs[0].data();
-          const stObj = new Date(`${newBookingDate}T${newStartTime}:00`);
-          const etObj = new Date(`${newBookingDate}T${newEndTime}:00`);
-          const hours = (etObj.getTime() - stObj.getTime()) / (1000 * 60 * 60);
-          const isWeekend = new Date(newBookingDate).getDay() === 0 || new Date(newBookingDate).getDay() === 6;
-          const rate = isWeekend ? pricingData.weekendRate : pricingData.weekdayRate;
-          calculatedPrice = pricingData.rateType === 'hourly' ? rate * hours : (hours >= 8 ? rate : rate * 0.5);
+        const stObj = new Date(`${newBookingDate}T${newStartTime}:00`);
+        const etObj = new Date(`${newBookingDate}T${newEndTime}:00`);
+        const hours = (etObj.getTime() - stObj.getTime()) / (1000 * 60 * 60);
+        const isWeekend = new Date(newBookingDate).getDay() === 0 || new Date(newBookingDate).getDay() === 6;
+
+        let breakdown = [];
+        for (const resId of (updateData.selectedHalls || newSelectedHalls)) {
+          const pricingSnapshot = await admin.firestore()
+            .collection('pricing')
+            .where('hallOwnerId', '==', permittedHallOwnerId)
+            .where('resourceId', '==', resId)
+            .get();
+          if (!pricingSnapshot.empty) {
+            const pricingData = pricingSnapshot.docs[0].data();
+            const rate = isWeekend ? pricingData.weekendRate : pricingData.weekdayRate;
+            const resPrice = pricingData.rateType === 'hourly' ? rate * hours : (hours >= 8 ? rate : rate * 0.5);
+            calculatedPrice += Number(resPrice || 0);
+            breakdown.push({
+              resourceId: resId,
+              weekdayRate: pricingData.weekdayRate,
+              weekendRate: pricingData.weekendRate,
+              rateType: pricingData.rateType,
+              appliedRate: rate,
+              durationHours: hours,
+              isWeekend,
+              calculatedPrice: resPrice
+            });
+          }
+        }
+
+        if (breakdown.length > 0) {
           priceDetails = {
-            rateType: pricingData.rateType,
-            weekdayRate: pricingData.weekdayRate,
-            weekendRate: pricingData.weekendRate,
-            appliedRate: rate,
-            durationHours: hours,
-            isWeekend: isWeekend,
-            calculationMethod: pricingData.rateType === 'hourly' ? 'hourly' : 'daily',
+            multiResource: true,
+            breakdown,
+            total: calculatedPrice,
+            calculationMethod: 'sum_per_resource',
             frontendEstimatedPrice: estimatedPrice || null
           };
         } else if (estimatedPrice !== undefined) {
           calculatedPrice = estimatedPrice || 0;
+        } else {
+          calculatedPrice = existing.calculatedPrice || 0;
+          priceDetails = existing.priceDetails || null;
         }
 
         updateData.calculatedPrice = calculatedPrice;
@@ -1721,8 +1766,13 @@ router.get('/unavailable-dates/:hallOwnerId', async (req, res) => {
       }
       
       // Filter by resource if specified
-      if (resourceId && booking.selectedHall !== resourceId) {
-        return false;
+      if (resourceId) {
+        const bResources = Array.isArray(booking.selectedHalls) && booking.selectedHalls.length > 0
+          ? booking.selectedHalls.map(String)
+          : [booking.selectedHall].filter(Boolean).map(String);
+        if (!bResources.includes(String(resourceId))) {
+          return false;
+        }
       }
       
       // Filter by date range if specified
@@ -1744,29 +1794,30 @@ router.get('/unavailable-dates/:hallOwnerId', async (req, res) => {
     filteredBookings.forEach(doc => {
       const booking = doc.data();
       const bookingDate = booking.bookingDate;
-      const selectedHall = booking.selectedHall;
+      const resources = (Array.isArray(booking.selectedHalls) && booking.selectedHalls.length > 0
+        ? booking.selectedHalls.map(String)
+        : [booking.selectedHall].filter(Boolean).map(String));
       
-      if (!bookingDate || !selectedHall) {
+      if (!bookingDate || resources.length === 0) {
         console.log('Skipping booking with missing data:', booking);
         return;
       }
       
-      if (!unavailableDates[bookingDate]) {
-        unavailableDates[bookingDate] = {};
+      if (!unavailableDates[bookingDate]) unavailableDates[bookingDate] = {};
+
+      for (const resId of resources) {
+        if (!unavailableDates[bookingDate][resId]) {
+          unavailableDates[bookingDate][resId] = [];
+        }
+        unavailableDates[bookingDate][resId].push({
+          bookingId: doc.id,
+          startTime: booking.startTime || 'N/A',
+          endTime: booking.endTime || 'N/A',
+          customerName: booking.customerName || 'Unknown',
+          eventType: booking.eventType || 'Unknown',
+          status: booking.status || 'Unknown'
+        });
       }
-      
-      if (!unavailableDates[bookingDate][selectedHall]) {
-        unavailableDates[bookingDate][selectedHall] = [];
-      }
-      
-      unavailableDates[bookingDate][selectedHall].push({
-        bookingId: doc.id,
-        startTime: booking.startTime || 'N/A',
-        endTime: booking.endTime || 'N/A',
-        customerName: booking.customerName || 'Unknown',
-        eventType: booking.eventType || 'Unknown',
-        status: booking.status || 'Unknown'
-      });
     });
 
     console.log('Processed unavailable dates:', Object.keys(unavailableDates));
