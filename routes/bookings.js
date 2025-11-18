@@ -569,6 +569,25 @@ router.post('/', async (req, res) => {
       return res.status(404).json({ message: 'Hall owner not found' });
     }
 
+    // If an authenticated customerId is provided, enforce tenant binding to this hallOwnerId
+    if (customerId) {
+      try {
+        const customerSnap = await admin.firestore().collection('customers').doc(String(customerId)).get();
+        if (!customerSnap.exists) {
+          // Unknown customer id; treat as guest booking for safety
+          console.warn('Public booking: provided customerId does not exist, proceeding as guest');
+        } else {
+          const customerData = customerSnap.data() || {};
+          const tenant = String(customerData.tenantId || '');
+          if (!tenant || tenant !== String(hallOwnerId)) {
+            return res.status(403).json({ message: 'This customer account belongs to a different hall. Please login on the correct hall booking page.' });
+          }
+        }
+      } catch (custErr) {
+        console.warn('Public booking: customer tenant check failed, proceeding as guest', custErr?.message || custErr);
+      }
+    }
+
     // Verify selected hall exists and belongs to the hall owner
     const hallDoc = await admin.firestore().collection('resources').doc(selectedHall).get();
     if (!hallDoc.exists) {
