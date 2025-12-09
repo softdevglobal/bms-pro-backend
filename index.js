@@ -1,11 +1,14 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const jwt = require('jsonwebtoken');
 const admin = require('./firebaseAdmin');
 const { captureIP } = require('./middleware/auditMiddleware');
 require('dotenv').config();
 
 const app = express();
+app.use(helmet());
 app.use(cors());
 // Mount raw body for Stripe webhooks before JSON parser on that route
 const stripeWebhooks = require('./routes/stripeWebhooks');
@@ -13,6 +16,13 @@ app.use('/api/webhooks/stripe', express.raw({ type: 'application/json' }), strip
 console.log('Stripe webhook route ready at /api/webhooks/stripe');
 app.use(express.json());
 app.use(captureIP); // Capture IP addresses for all requests
+
+// Basic rate limiting for all API routes to mitigate brute-force and abuse
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+});
+app.use('/api', apiLimiter);
 
 
 // Auth routes

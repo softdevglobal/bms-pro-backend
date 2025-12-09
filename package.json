@@ -18,13 +18,15 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.2",
     "express": "^5.1.0",
+    "express-rate-limit": "^7.5.1",
     "firebase-admin": "^13.5.0",
-    "stripe": "^14.25.0",
+    "helmet": "^7.2.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.0.2",
     "nodemailer": "^7.0.6",
     "pdfkit": "^0.15.2",
-    "puppeteer": "^23.7.0"
+    "puppeteer": "^23.7.0",
+    "stripe": "^14.25.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"
